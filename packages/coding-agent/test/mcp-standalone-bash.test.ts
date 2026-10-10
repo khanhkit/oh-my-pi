@@ -251,6 +251,18 @@ describe("standalone Bash malformed metadata", () => {
 });
 
 describe("KitControl execution bridge", () => {
+	test("default validation timeout tolerates a slow but available authority bridge", async () => {
+		const cwd = await workspace();
+		const bridge = await fakeRtk(
+			`if [ "$1" = validate ]; then sleep 0.35; exit 0; fi; printf '%s\\n' "$*" >> '${cwd}/events'`,
+		);
+		const result = await runStandaloneBash(
+			{ command: "printf validated", worker: "KitDev22", session_epoch: 2, execution_id: "slow-validate" },
+			{ cwd },
+			{ bridgeExecutable: bridge, fenceRequired: true, rtkExecutable: "/missing" },
+		);
+		expect(result).toEqual({ text: "validated", isError: false });
+	});
 	test("rejects stale sessions before RTK or Bash", async () => {
 		const cwd = await workspace();
 		const bridge = await fakeRtk("exit 42");
