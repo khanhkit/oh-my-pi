@@ -11,6 +11,10 @@ export interface StandaloneBashArgs {
 export interface StandaloneBashOptions {
 	rtkExecutable?: string;
 	timeoutMs?: number;
+	bridgeExecutable?: string;
+	fenceRequired?: boolean;
+	bridgeTimeoutMs?: number;
+	heartbeatMs?: number;
 }
 
 export interface RtkRewriteResult {
@@ -117,6 +121,60 @@ export async function rewriteWithRtk(
 	}
 }
 
+async function bridgeCall(
+	identity: ExecutionIdentity,
+	operation: "validate" | "event",
+	options: StandaloneBashOptions,
+	signal?: AbortSignal,
+	event?: string,
+	pid?: number,
+	exitCode?: number,
+): Promise<number> {
+	const executable = options.bridgeExecutable ?? process.env.OMP_KITCONTROL_EXEC_BRIDGE;
+	if (!executable || !executable.startsWith("/")) return -1;
+	if (signal?.aborted) throw signal.reason ?? new Error("Aborted");
+	const argv = [executable, operation, identity.worker, String(identity.sessionEpoch)];
+	if (operation === "event") {
+		argv.push(identity.executionId, event!);
+		if (pid !== undefined) argv.push("--pid", String(pid));
+		if (exitCode !== undefined) argv.push("--exit-code", String(exitCode));
+	}
+	let proc: ReturnType<typeof Bun.spawn>;
+	try {
+		proc = Bun.spawn(argv, { stdout: "ignore", stderr: "ignore", detached: process.platform !== "win32" });
+	} catch {
+		return -1;
+	}
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let rejectAbort: (() => void) | undefined;
+	const abort = () => terminateProcessTree(proc);
+	signal?.addEventListener("abort", abort, { once: true });
+	try {
+		const outcome = await Promise.race([
+			proc.exited,
+			new Promise<number>(resolve => {
+				timer = setTimeout(() => {
+					terminateProcessTree(proc);
+					resolve(-1);
+				}, options.bridgeTimeoutMs ?? 250);
+			}),
+			new Promise<number>((_, reject) => {
+				if (signal?.aborted) reject(signal.reason ?? new Error("Aborted"));
+				else {
+					rejectAbort = () => reject(signal?.reason ?? new Error("Aborted"));
+					signal?.addEventListener("abort", rejectAbort, { once: true });
+				}
+			}),
+		]);
+		if (outcome === -1) await proc.exited.catch(() => undefined);
+		return outcome;
+	} finally {
+		if (timer) clearTimeout(timer);
+		signal?.removeEventListener("abort", abort);
+		if (rejectAbort) signal?.removeEventListener("abort", rejectAbort);
+	}
+}
+
 export async function runStandaloneBash(
 	args: StandaloneBashArgs,
 	ctx: StandaloneToolContext,
@@ -124,46 +182,76 @@ export async function runStandaloneBash(
 ): Promise<StandaloneToolResult> {
 	const identity = resolveExecutionIdentity(args);
 	if (ctx.signal?.aborted) throw ctx.signal.reason ?? new Error("Aborted");
-	const rewritten = await rewriteWithRtk(args.command, { ...options, signal: ctx.signal });
-	if (ctx.signal?.aborted) throw ctx.signal.reason ?? new Error("Aborted");
-	const env: Record<string, string | undefined> = { ...process.env };
+	const required = options.fenceRequired ?? process.env.OMP_KITCONTROL_SESSION_FENCE_REQUIRED === "1";
 	if (identity) {
-		env.KIT_WORKER = identity.worker;
-		env.KIT_SESSION_EPOCH = String(identity.sessionEpoch);
-		env.KIT_EXECUTION_ID = identity.executionId;
-	} else {
-		delete env.KIT_WORKER;
-		delete env.KIT_SESSION_EPOCH;
-		delete env.KIT_EXECUTION_ID;
+		const status = await bridgeCall(identity, "validate", options, ctx.signal);
+		if (status === 42) return { text: "SESSION_SUPERSEDED", isError: true };
+		if (required && status !== 0) return { text: "SESSION_FENCE_UNAVAILABLE", isError: true };
 	}
-
-	const proc = Bun.spawn(["bash", "-lc", rewritten.command], {
-		cwd: ctx.cwd,
-		env,
-		stdout: "pipe",
-		stderr: "pipe",
-		detached: process.platform !== "win32",
-	});
-	const onAbort = () => terminateProcessTree(proc);
-	ctx.signal?.addEventListener("abort", onAbort, { once: true });
-	let stdout: string;
-	let stderr: string;
-	let exitCode: number;
-	try {
-		[stdout, stderr, exitCode] = await Promise.all([
-			new Response(proc.stdout).text(),
-			new Response(proc.stderr).text(),
-			proc.exited,
-		]);
-	} finally {
-		ctx.signal?.removeEventListener("abort", onAbort);
-	}
-	const combined = [stdout, stderr]
-		.filter(part => part.length > 0)
-		.join("\n")
-		.trim();
-	return {
-		text: combined || `(exit ${exitCode})`,
-		isError: exitCode !== 0,
+	const emit = (event: string, pid?: number, code?: number) => {
+		if (identity) void bridgeCall(identity, "event", options, undefined, event, pid, code).catch(() => undefined);
 	};
+	emit("EXEC_START");
+	let terminal = false;
+	const finish = (event: string, pid?: number, code?: number) => {
+		if (!terminal) {
+			terminal = true;
+			emit(event, pid, code);
+		}
+	};
+	try {
+		const rewritten = await rewriteWithRtk(args.command, { ...options, signal: ctx.signal });
+		if (ctx.signal?.aborted) throw ctx.signal.reason ?? new Error("Aborted");
+		const env: Record<string, string | undefined> = { ...process.env };
+		if (identity) {
+			env.KIT_WORKER = identity.worker;
+			env.KIT_SESSION_EPOCH = String(identity.sessionEpoch);
+			env.KIT_EXECUTION_ID = identity.executionId;
+		} else {
+			delete env.KIT_WORKER;
+			delete env.KIT_SESSION_EPOCH;
+			delete env.KIT_EXECUTION_ID;
+		}
+
+		const proc = Bun.spawn(["bash", "-lc", rewritten.command], {
+			cwd: ctx.cwd,
+			env,
+			stdout: "pipe",
+			stderr: "pipe",
+			detached: process.platform !== "win32",
+		});
+		const onAbort = () => {
+			terminateProcessTree(proc);
+			finish("EXEC_ABORT", proc.pid);
+		};
+		const heartbeat = identity
+			? setInterval(() => emit("EXEC_HEARTBEAT", proc.pid), options.heartbeatMs ?? 30_000)
+			: undefined;
+		ctx.signal?.addEventListener("abort", onAbort, { once: true });
+		let stdout: string;
+		let stderr: string;
+		let exitCode: number;
+		try {
+			[stdout, stderr, exitCode] = await Promise.all([
+				new Response(proc.stdout).text(),
+				new Response(proc.stderr).text(),
+				proc.exited,
+			]);
+		} finally {
+			ctx.signal?.removeEventListener("abort", onAbort);
+			if (heartbeat) clearInterval(heartbeat);
+		}
+		finish("EXEC_END", proc.pid, exitCode);
+		const combined = [stdout, stderr]
+			.filter(part => part.length > 0)
+			.join("\n")
+			.trim();
+		return {
+			text: combined || `(exit ${exitCode})`,
+			isError: exitCode !== 0,
+		};
+	} catch (error) {
+		finish(ctx.signal?.aborted ? "EXEC_ABORT" : "EXEC_ERROR");
+		throw error;
+	}
 }
