@@ -10,7 +10,7 @@
  */
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { runStandaloneBash } from "./standalone-bash";
+import { runStandaloneBash, type StandaloneBashArgs } from "./standalone-bash";
 import type {
 	HarnessSessionInterface,
 	ToolDescriptor,
@@ -223,9 +223,9 @@ export function createStandaloneTools(): StandaloneTool[] {
 				return runStandaloneBash(
 					{
 						command: asString(args.command),
-						worker: typeof args.worker === "string" ? args.worker : undefined,
-						session_epoch: typeof args.session_epoch === "number" ? args.session_epoch : undefined,
-						execution_id: typeof args.execution_id === "string" ? args.execution_id : undefined,
+						worker: args.worker as StandaloneBashArgs["worker"],
+						session_epoch: args.session_epoch as StandaloneBashArgs["session_epoch"],
+						execution_id: args.execution_id as StandaloneBashArgs["execution_id"],
 					},
 					ctx,
 				);

@@ -25,6 +25,22 @@ export interface ExecutionIdentity {
 	executionId: string;
 }
 
+function terminateProcessTree(proc: { pid: number; kill(signal?: number | NodeJS.Signals): void }): void {
+	if (process.platform !== "win32") {
+		try {
+			process.kill(-proc.pid, "SIGTERM");
+			return;
+		} catch {
+			// Fall back to terminating only the direct child if process groups are unavailable.
+		}
+	}
+	try {
+		proc.kill("SIGTERM");
+	} catch {
+		// The process may have already exited.
+	}
+}
+
 export function resolveExecutionIdentity(args: StandaloneBashArgs): ExecutionIdentity | undefined {
 	const hasWorker = args.worker !== undefined;
 	const hasEpoch = args.session_epoch !== undefined;
@@ -55,21 +71,29 @@ export async function rewriteWithRtk(
 ): Promise<RtkRewriteResult> {
 	let proc: ReturnType<typeof Bun.spawn> | undefined;
 	let timer: ReturnType<typeof setTimeout> | undefined;
+	let onAbort: (() => void) | undefined;
+	if (options.signal?.aborted) return { command, rewritten: false, reason: "aborted" };
 	try {
 		proc = Bun.spawn([options.rtkExecutable ?? "rtk", "rewrite", command], {
 			stdout: "pipe",
 			stderr: "ignore",
-			signal: options.signal,
+			detached: process.platform !== "win32",
 		});
+		onAbort = () => terminateProcessTree(proc!);
+		options.signal?.addEventListener("abort", onAbort, { once: true });
 		const stdoutPromise = new Response(proc.stdout as ReadableStream<Uint8Array>).text();
 		const completed = Promise.all([stdoutPromise, proc.exited] as const);
 		const timeout = new Promise<"timeout">(resolve => {
 			timer = setTimeout(() => {
-				proc?.kill();
+				if (proc) terminateProcessTree(proc);
 				resolve("timeout");
 			}, options.timeoutMs ?? 250);
 		});
 		const result = await Promise.race([completed, timeout]);
+		if (options.signal?.aborted) {
+			await proc.exited.catch(() => undefined);
+			return { command, rewritten: false, reason: "aborted" };
+		}
 		if (result === "timeout") {
 			await proc.exited.catch(() => undefined);
 			return { command, rewritten: false, reason: "timeout" };
@@ -81,10 +105,15 @@ export async function rewriteWithRtk(
 		}
 		return { command, rewritten: false, reason: "fallback" };
 	} catch {
-		proc?.kill();
-		return { command, rewritten: false, reason: "unavailable" };
+		if (proc) terminateProcessTree(proc);
+		return {
+			command,
+			rewritten: false,
+			reason: options.signal?.aborted ? "aborted" : "unavailable",
+		};
 	} finally {
 		if (timer) clearTimeout(timer);
+		if (onAbort) options.signal?.removeEventListener("abort", onAbort);
 	}
 }
 
@@ -94,7 +123,9 @@ export async function runStandaloneBash(
 	options: StandaloneBashOptions = {},
 ): Promise<StandaloneToolResult> {
 	const identity = resolveExecutionIdentity(args);
+	if (ctx.signal?.aborted) throw ctx.signal.reason ?? new Error("Aborted");
 	const rewritten = await rewriteWithRtk(args.command, { ...options, signal: ctx.signal });
+	if (ctx.signal?.aborted) throw ctx.signal.reason ?? new Error("Aborted");
 	const env: Record<string, string | undefined> = { ...process.env };
 	if (identity) {
 		env.KIT_WORKER = identity.worker;
@@ -111,13 +142,22 @@ export async function runStandaloneBash(
 		env,
 		stdout: "pipe",
 		stderr: "pipe",
-		signal: ctx.signal,
+		detached: process.platform !== "win32",
 	});
-	const [stdout, stderr] = await Promise.all([
-		new Response(proc.stdout).text(),
-		new Response(proc.stderr).text(),
-	]);
-	const exitCode = await proc.exited;
+	const onAbort = () => terminateProcessTree(proc);
+	ctx.signal?.addEventListener("abort", onAbort, { once: true });
+	let stdout: string;
+	let stderr: string;
+	let exitCode: number;
+	try {
+		[stdout, stderr, exitCode] = await Promise.all([
+			new Response(proc.stdout).text(),
+			new Response(proc.stderr).text(),
+			proc.exited,
+		]);
+	} finally {
+		ctx.signal?.removeEventListener("abort", onAbort);
+	}
 	const combined = [stdout, stderr]
 		.filter(part => part.length > 0)
 		.join("\n")
