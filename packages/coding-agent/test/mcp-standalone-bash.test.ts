@@ -290,6 +290,48 @@ describe("KitControl execution bridge", () => {
 });
 
 describe("KitControl lifecycle regressions", () => {
+	test("durably records START before terminal when START delivery is slower", async () => {
+		const cwd = await workspace();
+		const bridge = await fakeRtk(
+			`if [ "$1" = validate ]; then exit 0; fi; if [ "\${5:-}" = EXEC_START ]; then sleep 0.20; fi; printf '%s\\n' "$*" >> '${cwd}/events'`,
+		);
+		const result = await runStandaloneBash(
+			{ command: "true", worker: "KitDev22", session_epoch: 2, execution_id: "ordered" },
+			{ cwd },
+			{ bridgeExecutable: bridge, fenceRequired: true, bridgeTimeoutMs: 1000, rtkExecutable: "/missing" },
+		);
+		expect(result).toEqual({ text: "(exit 0)", isError: false });
+		await Bun.sleep(300);
+		const events = (await Bun.file(join(cwd, "events")).text()).split("\n").filter(Boolean);
+		const start = events.findIndex(x => x.includes("EXEC_START"));
+		const end = events.findIndex(x => x.includes("EXEC_END"));
+		expect(start).toBeGreaterThanOrEqual(0);
+		expect(end).toBeGreaterThan(start);
+	});
+
+	test("stops heartbeats immediately after ABORT is claimed", async () => {
+		const cwd = await workspace();
+		const bridge = await fakeRtk(`if [ "$1" = validate ]; then exit 0; fi; printf '%s\\n' "$*" >> '${cwd}/events'`);
+		const controller = new AbortController();
+		const running = runStandaloneBash(
+			{
+				command: "trap 'sleep 0.20; exit 0' TERM; while :; do sleep 1; done",
+				worker: "KitDev22",
+				session_epoch: 2,
+				execution_id: "abort-ordered",
+			},
+			{ cwd, signal: controller.signal },
+			{ bridgeExecutable: bridge, fenceRequired: true, heartbeatMs: 5, rtkExecutable: "/missing" },
+		);
+		await Bun.sleep(40);
+		controller.abort();
+		await running.catch(() => undefined);
+		await Bun.sleep(300);
+		const events = (await Bun.file(join(cwd, "events")).text()).split("\n").filter(Boolean);
+		const abort = events.findIndex(x => x.includes("EXEC_ABORT"));
+		expect(abort).toBeGreaterThanOrEqual(0);
+		expect(events.slice(abort + 1).some(x => x.includes("EXEC_HEARTBEAT"))).toBe(false);
+	});
 	test("heartbeat repeats and stops after terminal event", async () => {
 		const cwd = await workspace();
 		const bridge = await fakeRtk(`printf '%s\\n' "$*" >> '${cwd}/events'`);

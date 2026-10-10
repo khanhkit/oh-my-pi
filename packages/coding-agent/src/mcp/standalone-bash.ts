@@ -188,14 +188,23 @@ export async function runStandaloneBash(
 		if (status === 42) return { text: "SESSION_SUPERSEDED", isError: true };
 		if (required && status !== 0) return { text: "SESSION_FENCE_UNAVAILABLE", isError: true };
 	}
+	let telemetry = Promise.resolve();
 	const emit = (event: string, pid?: number, code?: number) => {
-		if (identity) void bridgeCall(identity, "event", options, undefined, event, pid, code).catch(() => undefined);
+		if (!identity) return;
+		telemetry = telemetry
+			.then(() => bridgeCall(identity, "event", options, undefined, event, pid, code))
+			.then(
+				() => undefined,
+				() => undefined,
+			);
 	};
 	emit("EXEC_START");
 	let terminal = false;
+	let heartbeat: ReturnType<typeof setInterval> | undefined;
 	const finish = (event: string, pid?: number, code?: number) => {
 		if (!terminal) {
 			terminal = true;
+			if (heartbeat) clearInterval(heartbeat);
 			emit(event, pid, code);
 		}
 	};
@@ -224,8 +233,10 @@ export async function runStandaloneBash(
 			terminateProcessTree(proc);
 			finish("EXEC_ABORT", proc.pid);
 		};
-		const heartbeat = identity
-			? setInterval(() => emit("EXEC_HEARTBEAT", proc.pid), options.heartbeatMs ?? 30_000)
+		heartbeat = identity
+			? setInterval(() => {
+					if (!terminal) emit("EXEC_HEARTBEAT", proc.pid);
+				}, options.heartbeatMs ?? 30_000)
 			: undefined;
 		ctx.signal?.addEventListener("abort", onAbort, { once: true });
 		let stdout: string;
