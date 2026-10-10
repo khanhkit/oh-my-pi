@@ -7,6 +7,7 @@ import {
 	rewriteWithRtk,
 	runStandaloneBash,
 } from "../src/mcp/standalone-bash";
+import { createStandaloneTools, StandaloneHarness } from "../src/mcp/standalone-harness";
 
 const tempDirs: string[] = [];
 
@@ -127,5 +128,47 @@ describe("standalone Bash RTK rewrite", () => {
 		const command = `printf '%s\\n' "a;b && c | d > e $(echo x) 'quoted'"`;
 		await rewriteWithRtk(command, { rtkExecutable: rtk });
 		expect(await Bun.file(capture).text()).toBe(command);
+	});
+});
+
+describe("standalone Bash harness contract", () => {
+	test("descriptor exposes optional attribution fields while keeping command required", () => {
+		const harness = new StandaloneHarness("/tmp", createStandaloneTools());
+		const bash = harness.getTool("bash");
+		expect(bash).toBeDefined();
+		const parameters = bash?.parameters as {
+			properties?: Record<string, unknown>;
+			required?: string[];
+		};
+		expect(parameters.required).toEqual(["command"]);
+		expect(parameters.properties).toHaveProperty("command");
+		expect(parameters.properties).toHaveProperty("worker");
+		expect(parameters.properties).toHaveProperty("session_epoch");
+		expect(parameters.properties).toHaveProperty("execution_id");
+	});
+
+	test("harness accepts command-only calls and forwards attributed metadata", async () => {
+		const cwd = await workspace();
+		const harness = new StandaloneHarness(cwd, createStandaloneTools());
+		const plain = await harness.invokeTool({
+			callId: "plain",
+			toolName: "bash",
+			arguments: { command: "printf plain" },
+		});
+		expect(plain.isError).toBeFalsy();
+		expect(plain.content[0]).toEqual({ type: "text", text: "plain" });
+
+		const attributed = await harness.invokeTool({
+			callId: "attributed",
+			toolName: "bash",
+			arguments: {
+				command: "printf '%s|%s|%s' \"$KIT_WORKER\" \"$KIT_SESSION_EPOCH\" \"$KIT_EXECUTION_ID\"",
+				worker: "KitDev19",
+				session_epoch: 11,
+				execution_id: "from-harness",
+			},
+		});
+		expect(attributed.isError).toBeFalsy();
+		expect(attributed.content[0]).toEqual({ type: "text", text: "KitDev19|11|from-harness" });
 	});
 });

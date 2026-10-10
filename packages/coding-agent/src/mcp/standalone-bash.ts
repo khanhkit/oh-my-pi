@@ -61,7 +61,7 @@ export async function rewriteWithRtk(
 			stderr: "ignore",
 			signal: options.signal,
 		});
-		const stdoutPromise = new Response(proc.stdout).text();
+		const stdoutPromise = new Response(proc.stdout as ReadableStream<Uint8Array>).text();
 		const completed = Promise.all([stdoutPromise, proc.exited] as const);
 		const timeout = new Promise<"timeout">(resolve => {
 			timer = setTimeout(() => {

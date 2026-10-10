@@ -10,6 +10,7 @@
  */
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { runStandaloneBash } from "./standalone-bash";
 import type {
 	HarnessSessionInterface,
 	ToolDescriptor,
@@ -211,30 +212,23 @@ export function createStandaloneTools(): StandaloneTool[] {
 				type: "object",
 				properties: {
 					command: { type: "string", description: "Shell command to execute." },
+					worker: { type: "string", description: "Optional KitDev worker attribution." },
+					session_epoch: { type: "integer", description: "Optional positive KitDev session epoch." },
+					execution_id: { type: "string", description: "Optional execution identifier." },
 				},
 				required: ["command"],
 			},
 			execution: true,
 			async run(args, ctx) {
-				const command = asString(args.command);
-				const proc = Bun.spawn(["bash", "-lc", command], {
-					cwd: ctx.cwd,
-					stdout: "pipe",
-					stderr: "pipe",
-				});
-				const [stdout, stderr] = await Promise.all([
-					new Response(proc.stdout).text(),
-					new Response(proc.stderr).text(),
-				]);
-				const exitCode = await proc.exited;
-				const combined = [stdout, stderr]
-					.filter(part => part.length > 0)
-					.join("\n")
-					.trim();
-				return {
-					text: combined || `(exit ${exitCode})`,
-					isError: exitCode !== 0,
-				};
+				return runStandaloneBash(
+					{
+						command: asString(args.command),
+						worker: typeof args.worker === "string" ? args.worker : undefined,
+						session_epoch: typeof args.session_epoch === "number" ? args.session_epoch : undefined,
+						execution_id: typeof args.execution_id === "string" ? args.execution_id : undefined,
+					},
+					ctx,
+				);
 			},
 		},
 	];
