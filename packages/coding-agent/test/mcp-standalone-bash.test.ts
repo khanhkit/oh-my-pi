@@ -288,3 +288,69 @@ describe("KitControl execution bridge", () => {
 		expect(events).toContain("event KitDev22 1 test-id EXEC_END");
 	});
 });
+
+describe("KitControl lifecycle regressions", () => {
+	test("heartbeat repeats and stops after terminal event", async () => {
+		const cwd = await workspace();
+		const bridge = await fakeRtk(`printf '%s\\n' "$*" >> '${cwd}/events'`);
+		await runStandaloneBash(
+			{ command: "sleep 0.16", worker: "KitDev22", session_epoch: 2 },
+			{ cwd },
+			{ bridgeExecutable: bridge, fenceRequired: true, heartbeatMs: 25, rtkExecutable: "/missing" },
+		);
+		await Bun.sleep(100);
+		const before = (await Bun.file(join(cwd, "events")).text()).split("\n");
+		expect(before.filter(x => x.includes("EXEC_HEARTBEAT")).length).toBeGreaterThanOrEqual(2);
+		expect(before.filter(x => x.includes("EXEC_END")).length).toBe(1);
+		await Bun.sleep(80);
+		expect(
+			(await Bun.file(join(cwd, "events")).text()).split("\n").filter(x => x.includes("EXEC_HEARTBEAT")).length,
+		).toBe(before.filter(x => x.includes("EXEC_HEARTBEAT")).length);
+	});
+	test("event bridge failures and timeouts do not alter command result", async () => {
+		const cwd = await workspace();
+		const bridge = await fakeRtk('if [ "$1" = validate ]; then exit 0; fi; sleep 2');
+		const result = await runStandaloneBash(
+			{ command: "printf ok", worker: "KitDev22", session_epoch: 2 },
+			{ cwd },
+			{ bridgeExecutable: bridge, bridgeTimeoutMs: 15, fenceRequired: true, rtkExecutable: "/missing" },
+		);
+		expect(result).toEqual({ text: "ok", isError: false });
+	});
+	test("abort produces one ABORT and never END or ERROR", async () => {
+		const cwd = await workspace();
+		const bridge = await fakeRtk(`printf '%s\\n' "$*" >> '${cwd}/events'`);
+		const controller = new AbortController();
+		const running = runStandaloneBash(
+			{ command: "sleep 3", worker: "KitDev22", session_epoch: 2 },
+			{ cwd, signal: controller.signal },
+			{ bridgeExecutable: bridge, fenceRequired: true, heartbeatMs: 20, rtkExecutable: "/missing" },
+		);
+		await Bun.sleep(90);
+		controller.abort();
+		await running.catch(() => undefined);
+		await Bun.sleep(100);
+		const events = await Bun.file(join(cwd, "events")).text();
+		expect(events.match(/EXEC_ABORT/g)?.length).toBe(1);
+		expect(events).not.toContain("EXEC_END");
+		expect(events).not.toContain("EXEC_ERROR");
+	});
+	test("RTK success and fallback emit matching lifecycle types", async () => {
+		const cwd = await workspace();
+		const bridge = await fakeRtk(`printf '%s\\n' "$*" >> '${cwd}/events'`);
+		for (const body of ['printf "printf rewritten"', "exit 1"]) {
+			const rtk = await fakeRtk(body);
+			await runStandaloneBash(
+				{ command: "printf original", worker: "KitDev22", session_epoch: 2 },
+				{ cwd },
+				{ bridgeExecutable: bridge, fenceRequired: true, rtkExecutable: rtk },
+			);
+			await Bun.sleep(60);
+		}
+		const events = (await Bun.file(join(cwd, "events")).text())
+			.split("\n")
+			.filter(x => x.includes(" event ") || x.startsWith("event "));
+		expect(events.filter(x => x.includes("EXEC_START")).length).toBe(2);
+		expect(events.filter(x => x.includes("EXEC_END")).length).toBe(2);
+	});
+});
