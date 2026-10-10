@@ -290,6 +290,22 @@ describe("KitControl execution bridge", () => {
 });
 
 describe("KitControl lifecycle regressions", () => {
+	test("default event timeout tolerates a slow but available telemetry bridge", async () => {
+		const cwd = await workspace();
+		const bridge = await fakeRtk(
+			`if [ "$1" = validate ]; then exit 0; fi; if [ "\${5:-}" = EXEC_START ]; then sleep 0.35; fi; printf '%s\\n' "$*" >> '${cwd}/events'`,
+		);
+		const result = await runStandaloneBash(
+			{ command: "true", worker: "KitDev22", session_epoch: 2, execution_id: "slow-default" },
+			{ cwd },
+			{ bridgeExecutable: bridge, fenceRequired: true, rtkExecutable: "/missing" },
+		);
+		expect(result).toEqual({ text: "(exit 0)", isError: false });
+		await Bun.sleep(800);
+		const events = (await Bun.file(join(cwd, "events")).text()).split("\n").filter(Boolean);
+		const lifecycle = events.filter(x => x.includes("slow-default"));
+		expect(lifecycle.map(x => x.split(" ")[4])).toEqual(["EXEC_START", "EXEC_END"]);
+	});
 	test("durably records START before terminal when START delivery is slower", async () => {
 		const cwd = await workspace();
 		const bridge = await fakeRtk(

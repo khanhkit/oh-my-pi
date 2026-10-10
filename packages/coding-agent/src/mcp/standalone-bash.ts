@@ -150,13 +150,14 @@ async function bridgeCall(
 	const abort = () => terminateProcessTree(proc);
 	signal?.addEventListener("abort", abort, { once: true });
 	try {
+		const timeoutMs = options.bridgeTimeoutMs ?? (operation === "event" ? 1000 : 250);
 		const outcome = await Promise.race([
 			proc.exited,
 			new Promise<number>(resolve => {
 				timer = setTimeout(() => {
 					terminateProcessTree(proc);
 					resolve(-1);
-				}, options.bridgeTimeoutMs ?? 250);
+				}, timeoutMs);
 			}),
 			new Promise<number>((_, reject) => {
 				if (signal?.aborted) reject(signal.reason ?? new Error("Aborted"));
