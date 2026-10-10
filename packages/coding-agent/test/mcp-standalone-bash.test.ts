@@ -249,3 +249,42 @@ describe("standalone Bash malformed metadata", () => {
 		expect(await Bun.file(marker).exists()).toBe(false);
 	});
 });
+
+describe("KitControl execution bridge", () => {
+	test("rejects stale sessions before RTK or Bash", async () => {
+		const cwd = await workspace();
+		const bridge = await fakeRtk("exit 42");
+		const result = await runStandaloneBash(
+			{ command: "touch forbidden", worker: "KitDev22", session_epoch: 1 },
+			{ cwd },
+			{ bridgeExecutable: bridge, fenceRequired: true, rtkExecutable: "/missing" },
+		);
+		expect(result).toEqual({ text: "SESSION_SUPERSEDED", isError: true });
+		expect(await Bun.file(join(cwd, "forbidden")).exists()).toBe(false);
+	});
+	test("fails closed when required bridge is unavailable", async () => {
+		const cwd = await workspace();
+		const result = await runStandaloneBash(
+			{ command: "touch forbidden", worker: "KitDev22", session_epoch: 1 },
+			{ cwd },
+			{ bridgeExecutable: "/missing", fenceRequired: true },
+		);
+		expect(result).toEqual({ text: "SESSION_FENCE_UNAVAILABLE", isError: true });
+		expect(await Bun.file(join(cwd, "forbidden")).exists()).toBe(false);
+	});
+	test("validates then executes and reports lifecycle", async () => {
+		const cwd = await workspace();
+		const bridge = await fakeRtk(`printf '%s\\n' "$*" >> '${cwd}/events'`);
+		const result = await runStandaloneBash(
+			{ command: "printf success", worker: "KitDev22", session_epoch: 1, execution_id: "test-id" },
+			{ cwd },
+			{ bridgeExecutable: bridge, fenceRequired: true, rtkExecutable: "/missing" },
+		);
+		expect(result).toEqual({ text: "success", isError: false });
+		await Bun.sleep(100);
+		const events = await Bun.file(join(cwd, "events")).text();
+		expect(events).toContain("validate KitDev22 1");
+		expect(events).toContain("event KitDev22 1 test-id EXEC_START");
+		expect(events).toContain("event KitDev22 1 test-id EXEC_END");
+	});
+});
