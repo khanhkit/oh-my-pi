@@ -191,7 +191,10 @@ export function createStandaloneTools(): StandaloneTool[] {
 			parameters: {
 				type: "object",
 				properties: {
-					dirPath: { type: "string", description: "Directory path relative to the workspace root. Defaults to '.'." },
+					dirPath: {
+						type: "string",
+						description: "Directory path relative to the workspace root. Defaults to '.'.",
+					},
 				},
 			},
 			async run(args, ctx) {
@@ -224,7 +227,10 @@ export function createStandaloneTools(): StandaloneTool[] {
 					new Response(proc.stderr).text(),
 				]);
 				const exitCode = await proc.exited;
-				const combined = [stdout, stderr].filter(part => part.length > 0).join("\n").trim();
+				const combined = [stdout, stderr]
+					.filter(part => part.length > 0)
+					.join("\n")
+					.trim();
 				return {
 					text: combined || `(exit ${exitCode})`,
 					isError: exitCode !== 0,
@@ -313,9 +319,7 @@ export class StandaloneHarness implements HarnessSessionInterface {
  * Best-effort discovery of custom/plugin tools from trusted local directories.
  * Plugin modules are imported directly; failures are reported, never fatal.
  */
-export async function discoverStandalonePlugins(
-	cwd: string,
-): Promise<{ tools: StandaloneTool[]; errors: string[] }> {
+export async function discoverStandalonePlugins(cwd: string): Promise<{ tools: StandaloneTool[]; errors: string[] }> {
 	const directories = [join(cwd, ".omp", "tools"), join(cwd, ".claude", "tools")];
 	const tools: StandaloneTool[] = [];
 	const errors: string[] = [];

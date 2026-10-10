@@ -68,10 +68,7 @@ Bun.serve({
 		}
 
 		if (req.method === "GET" && url.pathname === "/health") {
-			return Response.json(
-				{ status: "ok", server: "OhMyPi", externalEnabled },
-				{ headers: jsonHeaders },
-			);
+			return Response.json({ status: "ok", server: "OhMyPi", externalEnabled }, { headers: jsonHeaders });
 		}
 
 		if (req.method === "POST" && (url.pathname === "/mcp" || url.pathname === "/")) {

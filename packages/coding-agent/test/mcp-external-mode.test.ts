@@ -106,7 +106,7 @@ describe("mcp-external-mode", () => {
 				description: "Permitted tool",
 				parameters: { type: "object", properties: {} },
 			},
-			async (req) => ({
+			async req => ({
 				callId: req.callId,
 				toolName: req.toolName,
 				content: [{ type: "text", text: "allowed tool response" }],
@@ -118,7 +118,7 @@ describe("mcp-external-mode", () => {
 				description: "Unauthorized tool",
 				parameters: { type: "object", properties: {} },
 			},
-			async (req) => ({
+			async req => ({
 				callId: req.callId,
 				toolName: req.toolName,
 				content: [{ type: "text", text: "unauthorized tool response" }],
@@ -208,7 +208,7 @@ describe("mcp-external-mode", () => {
 				description: "Calculator",
 				parameters: { type: "object", properties: {} },
 			},
-			async (req) => ({
+			async req => ({
 				callId: req.callId,
 				toolName: req.toolName,
 				content: [{ type: "text", text: "42" }],
@@ -216,7 +216,7 @@ describe("mcp-external-mode", () => {
 		);
 
 		const tools = pair.llmPort.getAvailableTools();
-		expect(tools.some((t) => t.name === "calc")).toBe(true);
+		expect(tools.some(t => t.name === "calc")).toBe(true);
 
 		const dispatchRes = await pair.llmPort.dispatchToolCall({
 			callId: "call_abc",
@@ -224,7 +224,10 @@ describe("mcp-external-mode", () => {
 			arguments: {},
 		});
 		expect(dispatchRes.isError).toBeFalsy();
-		expect(dispatchRes.content[0].text).toBe("42");
+		const dispatchContent = dispatchRes.content[0];
+		expect(dispatchContent?.type).toBe("text");
+		if (!dispatchContent || dispatchContent.type !== "text") throw new Error("expected text content");
+		expect(dispatchContent.text).toBe("42");
 
 		// Verify externalHook is functional
 		expect(pair.externalHook).toBeDefined();
@@ -235,7 +238,10 @@ describe("mcp-external-mode", () => {
 				arguments: {},
 			});
 			expect(hookRes.isError).toBeFalsy();
-			expect(hookRes.content[0].text).toBe("42");
+			const hookContent = hookRes.content[0];
+			expect(hookContent?.type).toBe("text");
+			if (!hookContent || hookContent.type !== "text") throw new Error("expected text content");
+			expect(hookContent.text).toBe("42");
 
 			const hookUnauthorizedRes = await pair.externalHook.invokeTool({
 				callId: "call_hook_unauth",

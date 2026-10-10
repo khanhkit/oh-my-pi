@@ -29,11 +29,7 @@ export * from "./extensibility/skills";
 // Slash commands
 export { type FileSlashCommand, loadSlashCommands as discoverSlashCommands } from "./extensibility/slash-commands";
 export * from "./harness";
-export {
-	ExternalHarnessController,
-	createConnectedHarnessPair,
-	type ExternalHarnessConfig,
-} from "./harness";
+export { ExternalHarnessController, createConnectedHarnessPair, type ExternalHarnessConfig } from "./harness";
 export * from "./mcp";
 export { OhMyPiMcpServer } from "./mcp";
 export type * from "./lsp";

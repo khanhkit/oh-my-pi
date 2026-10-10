@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { OhMyPiMcpServer } from "../src/mcp/server.ts";
+import { OhMyPiMcpServer } from "../src/mcp/server";
 import type {
 	HarnessSessionInterface,
 	ToolDescriptor,
 	ToolInvocationRequest,
 	ToolInvocationResult,
 	WorkspacePolicy,
-} from "../src/harness/types.ts";
+} from "../src/harness/types";
 
 const mockTools: ToolDescriptor[] = [
 	{
@@ -173,18 +173,18 @@ async function runTests() {
 
 	// 7. connectTransport
 	let receivedByTransport: any = null;
-	let messageCallback: ((msg: any) => void) | null = null;
+	const transportState: { messageCallback?: (msg: any) => void } = {};
 	const mockTransport = {
 		send: (msg: any) => {
 			receivedByTransport = msg;
 		},
 		onMessage: (cb: (msg: any) => void) => {
-			messageCallback = cb;
+			transportState.messageCallback = cb;
 		},
 	};
 	server.connectTransport(mockTransport);
-	assert.ok(messageCallback);
-	messageCallback!({
+	assert.ok(transportState.messageCallback);
+	transportState.messageCallback({
 		jsonrpc: "2.0",
 		id: 7,
 		method: "ping",

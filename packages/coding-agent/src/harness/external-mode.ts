@@ -274,8 +274,7 @@ export interface ConnectedHarnessPair {
 
 export function createConnectedHarnessPair(options?: ConnectedHarnessPairOptions): ConnectedHarnessPair {
 	const controller =
-		options?.externalController ??
-		new ExternalHarnessController(options?.externalConfig ?? options?.externalMode);
+		options?.externalController ?? new ExternalHarnessController(options?.externalConfig ?? options?.externalMode);
 
 	const harness = options?.harness ?? new DefaultInProcessHarness(controller.config.workspaceRoot);
 

@@ -15,17 +15,20 @@ export interface LocalHarnessAdapterOptions {
 	workspacePolicy?: Partial<WorkspacePolicy>;
 }
 
+function isLocalHarnessAdapterOptions(
+	value: ToolSession | LocalHarnessAdapterOptions,
+): value is LocalHarnessAdapterOptions {
+	return Object.prototype.hasOwnProperty.call(value, "session");
+}
+
 export class LocalHarnessAdapter implements HarnessSessionInterface {
 	readonly #session: ToolSession;
 	readonly #toolRegistry: Map<string, Tool>;
 	readonly #workspacePolicy: WorkspacePolicy;
 	#disposed = false;
 
-	constructor(
-		sessionOrOptions: ToolSession | LocalHarnessAdapterOptions,
-		toolRegistry?: Map<string, Tool>,
-	) {
-		if ("session" in sessionOrOptions && typeof sessionOrOptions.session === "object") {
+	constructor(sessionOrOptions: ToolSession | LocalHarnessAdapterOptions, toolRegistry?: Map<string, Tool>) {
+		if (isLocalHarnessAdapterOptions(sessionOrOptions)) {
 			this.#session = sessionOrOptions.session;
 			this.#toolRegistry = sessionOrOptions.toolRegistry ?? sessionOrOptions.session.toolRegistry ?? new Map();
 			this.#workspacePolicy = {
@@ -118,24 +121,19 @@ export class LocalHarnessAdapter implements HarnessSessionInterface {
 			return {
 				callId: request.callId,
 				toolName: request.toolName,
-				content: [{ type: "text", text: `Tool invocation denied by WorkspacePolicy (read-only): "${request.toolName}"` }],
+				content: [
+					{ type: "text", text: `Tool invocation denied by WorkspacePolicy (read-only): "${request.toolName}"` },
+				],
 				isError: true,
 			};
 		}
 
 		try {
 			const context = this.#session.getToolContext?.();
-			const result = await tool.execute(
-				request.callId,
-				request.arguments,
-				request.signal,
-				undefined,
-				context,
-			);
-			const isError = isRecord(result) && (
-				result.isError === true ||
-				(isRecord(result.details) && result.details.isError === true)
-			);
+			const result = await tool.execute(request.callId, request.arguments, request.signal, undefined, context);
+			const isError =
+				isRecord(result) &&
+				(result.isError === true || (isRecord(result.details) && result.details.isError === true));
 			return {
 				callId: request.callId,
 				toolName: request.toolName,

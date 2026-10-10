@@ -1,11 +1,7 @@
 import * as readline from "node:readline";
 import type { ExternalHarnessConfig, ExternalHarnessController } from "../harness/external-mode";
 import { ExternalHarnessController as ExternalHarnessControllerImpl } from "../harness/external-mode";
-import type {
-	HarnessSessionInterface,
-	ToolDescriptor,
-	ToolInvocationRequest,
-} from "../harness/types";
+import type { HarnessSessionInterface, ToolDescriptor, ToolInvocationRequest } from "../harness/types";
 
 export interface McpTransport {
 	send: (msg: any) => void;
@@ -50,10 +46,7 @@ export class OhMyPiMcpServer {
 		return this.#externalController;
 	}
 
-	connectTransport(transport: {
-		send: (msg: any) => void;
-		onMessage: (cb: (msg: any) => void) => void;
-	}): void {
+	connectTransport(transport: { send: (msg: any) => void; onMessage: (cb: (msg: any) => void) => void }): void {
 		transport.onMessage(async (msg: any) => {
 			try {
 				const response = await this.handleMessage(msg);
@@ -266,30 +259,8 @@ export class OhMyPiMcpServer {
 					};
 					const invokeResult = await this.#harness.invokeTool(invocationReq);
 
-					const isError = Boolean(
-						invokeResult &&
-							typeof invokeResult === "object" &&
-							(invokeResult as { isError?: boolean }).isError,
-					);
-
-					let content: unknown[];
-					if (
-						invokeResult &&
-						typeof invokeResult === "object" &&
-						Array.isArray((invokeResult as { content?: unknown[] }).content)
-					) {
-						content = (invokeResult as { content: unknown[] }).content;
-					} else {
-						content = [
-							{
-								type: "text",
-								text:
-									typeof invokeResult === "string"
-										? invokeResult
-										: JSON.stringify(invokeResult ?? null),
-							},
-						];
-					}
+					const isError = Boolean(invokeResult.isError);
+					const content = invokeResult.content;
 
 					return {
 						jsonrpc: "2.0",

@@ -1,7 +1,13 @@
+import { Database } from "bun:sqlite";
 import { logger } from "@oh-my-pi/pi-utils";
+import { ModelRegistry } from "../config/model-registry";
 import { Settings } from "../config/settings";
 import { discoverAndLoadCustomTools } from "../extensibility/custom-tools/loader";
+import type { CustomToolContext } from "../extensibility/custom-tools/types";
+import { CustomToolAdapter } from "../extensibility/custom-tools/wrapper";
 import { LocalHarnessAdapter } from "../harness/adapter";
+import { AuthStorage, SqliteAuthCredentialStore } from "../session/auth-storage";
+import { SessionManager } from "../session/session-manager";
 import { ExternalHarnessController } from "../harness/external-mode";
 import { createTools, type Tool, type ToolSession } from "../tools";
 import { OhMyPiMcpServer } from "./server";
@@ -33,13 +39,27 @@ for (const tool of tools) {
 	toolRegistry.set(tool.name, tool);
 }
 
+const customToolSessionManager = SessionManager.inMemory(workspaceRoot);
+const customToolAuthStorage = new AuthStorage(new SqliteAuthCredentialStore(new Database(":memory:")));
+const customToolModelRegistry = new ModelRegistry(customToolAuthStorage, undefined, { settings: session.settings });
+const getCustomToolContext = (): CustomToolContext => ({
+	sessionManager: customToolSessionManager,
+	modelRegistry: customToolModelRegistry,
+	model: undefined,
+	isIdle: () => true,
+	hasQueuedMessages: () => false,
+	abort: () => {},
+	settings: session.settings,
+});
+
 // Load custom/plugin tools headlessly. Loader executes plugin code on import; only
 // trusted local sources are scanned. Errors go to stderr to keep stdout JSON-RPC clean.
 try {
-	const builtInToolNames = tools.map((tool) => tool.name);
+	const builtInToolNames = tools.map(tool => tool.name);
 	const loaded = await discoverAndLoadCustomTools([], workspaceRoot, builtInToolNames);
 	for (const loadedTool of loaded.tools) {
-		toolRegistry.set(loadedTool.tool.name, loadedTool.tool);
+		const tool = CustomToolAdapter.wrap(loadedTool.tool, getCustomToolContext) as Tool;
+		toolRegistry.set(tool.name, tool);
 	}
 	for (const error of loaded.errors) {
 		console.error(`[ohmypi-mcp] custom tool load error: ${error.path}: ${error.error}`);
