@@ -29,13 +29,19 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.0
-      - name: Check focused formatting
-        run: >-
-          npx --yes oxfmt --check
-          packages/coding-agent/src/mcp/standalone-bash.ts
-          packages/coding-agent/src/mcp/standalone-harness.ts
-          packages/coding-agent/test/mcp-standalone-bash.test.ts
-          packages/coding-agent/test/mcp-stateless-kitcontrol-exec.test.ts
+      - name: Show canonical focused formatting diff
+        run: |
+          npx --yes oxfmt \
+            packages/coding-agent/src/mcp/standalone-bash.ts \
+            packages/coding-agent/src/mcp/standalone-harness.ts \
+            packages/coding-agent/test/mcp-standalone-bash.test.ts \
+            packages/coding-agent/test/mcp-stateless-kitcontrol-exec.test.ts
+          git diff --check
+          git diff --exit-code -- \
+            packages/coding-agent/src/mcp/standalone-bash.ts \
+            packages/coding-agent/src/mcp/standalone-harness.ts \
+            packages/coding-agent/test/mcp-standalone-bash.test.ts \
+            packages/coding-agent/test/mcp-stateless-kitcontrol-exec.test.ts
       - name: Run standalone KitControl execution regressions
         run: >-
           bun test
