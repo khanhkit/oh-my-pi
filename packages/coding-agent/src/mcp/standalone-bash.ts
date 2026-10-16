@@ -4,8 +4,11 @@ import type { StandaloneToolContext, StandaloneToolResult } from "./standalone-h
 
 export interface StandaloneBashArgs {
 	command: string;
+	/** Task execution directory relative to the MCP workspace root. Not an authority token. */
+	cwd?: string;
 }
 
+/** Legacy trusted compatibility context. New production calls resolve authority from cwd. */
 export interface DurableExecutionIdentity {
 	worker: string;
 	sessionEpoch: number;
@@ -19,9 +22,9 @@ export interface StandaloneBashOptions {
 	fenceRequired?: boolean;
 	bridgeTimeoutMs?: number;
 	heartbeatMs?: number;
-	/** Trusted server-side durable context. Never expose this in the model tool schema. */
+	/** Legacy trusted compatibility context. Never expose this in the model tool schema. */
 	durableIdentity?: DurableExecutionIdentity;
-	/** Linux filesystem sandbox used for actor-less command execution. */
+	/** Linux filesystem sandbox used for stateless filesystem-resolved execution. */
 	sandboxExecutable?: string;
 }
 
@@ -37,10 +40,12 @@ export interface ExecutionIdentity {
 	executionId: string;
 }
 
-interface EphemeralExecutionGrant {
-	kind: "EPHEMERAL";
+interface ExecutionGrant {
+	kind: "EPHEMERAL" | "DURABLE";
 	project: string;
 	projects?: string[];
+	worker?: string;
+	generation?: number;
 	scope_root: string;
 	writable_roots?: string[];
 	cwd: string;
@@ -71,6 +76,13 @@ function terminateProcessTree(proc: { pid: number; kill(signal?: number | NodeJS
 function isWithin(target: string, root: string): boolean {
 	const rel = relative(resolve(root), resolve(target));
 	return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+function resolveRequestedCwd(args: StandaloneBashArgs, ctx: StandaloneToolContext): string {
+	const root = resolve(ctx.cwd);
+	const requested = args.cwd ? resolve(root, args.cwd) : root;
+	if (!isWithin(requested, root)) throw new Error("WORKSPACE_ESCAPE: cwd resolves outside workspace root");
+	return requested;
 }
 
 export function resolveExecutionIdentity(identity?: DurableExecutionIdentity): ExecutionIdentity | undefined {
@@ -222,16 +234,26 @@ async function bridgeCall(
 	return (await invokeBridge(argv, options, signal)).code;
 }
 
-function parseEphemeralGrant(raw: string, requestedCwd: string): EphemeralExecutionGrant | undefined {
+function parseExecutionGrant(raw: string, requestedCwd: string): ExecutionGrant | undefined {
 	try {
-		const value = JSON.parse(raw) as Partial<EphemeralExecutionGrant>;
+		const value = JSON.parse(raw) as Partial<ExecutionGrant>;
 		if (
-			value.kind !== "EPHEMERAL" ||
+			(value.kind !== "EPHEMERAL" && value.kind !== "DURABLE") ||
 			typeof value.project !== "string" ||
 			typeof value.scope_root !== "string" ||
 			typeof value.cwd !== "string"
 		) {
 			return undefined;
+		}
+		if (value.kind === "DURABLE") {
+			if (
+				typeof value.worker !== "string" ||
+				value.worker.length === 0 ||
+				!Number.isSafeInteger(value.generation) ||
+				(value.generation ?? 0) <= 0
+			) {
+				return undefined;
+			}
 		}
 		const cwd = resolve(value.cwd);
 		const scopeRoot = resolve(value.scope_root);
@@ -244,9 +266,11 @@ function parseEphemeralGrant(raw: string, requestedCwd: string): EphemeralExecut
 		const protectedPaths = value.protected_write_paths ?? [];
 		if (!Array.isArray(protectedPaths) || protectedPaths.some(path => typeof path !== "string")) return undefined;
 		return {
-			kind: "EPHEMERAL",
+			kind: value.kind,
 			project: value.project,
 			projects: value.projects,
+			worker: value.worker,
+			generation: value.generation,
 			scope_root: scopeRoot,
 			writable_roots: writableRoots.map(root => resolve(root)),
 			cwd,
@@ -257,27 +281,27 @@ function parseEphemeralGrant(raw: string, requestedCwd: string): EphemeralExecut
 	}
 }
 
-async function requestEphemeralGrant(
+async function requestExecutionGrant(
 	cwd: string,
 	options: StandaloneBashOptions,
 	signal?: AbortSignal,
-): Promise<EphemeralExecutionGrant | undefined> {
+): Promise<ExecutionGrant | undefined> {
 	const executable = bridgeExecutable(options);
 	if (!executable) return undefined;
-	const outcome = await invokeBridge([executable, "grant-ephemeral", cwd], options, signal);
+	const outcome = await invokeBridge([executable, "grant-execution", cwd], options, signal);
 	if (outcome.code !== 0) return undefined;
-	return parseEphemeralGrant(outcome.stdout, cwd);
+	return parseExecutionGrant(outcome.stdout, cwd);
 }
 
 async function bridgeEphemeralEvent(
-	grant: EphemeralExecutionGrant,
+	grant: ExecutionGrant,
 	executionId: string,
 	event: string,
 	options: StandaloneBashOptions,
 	pid?: number,
 	exitCode?: number,
 ): Promise<number> {
-	if (grant.project === "MULTI_PROJECT") return 0;
+	if (grant.kind !== "EPHEMERAL" || grant.project === "MULTI_PROJECT") return 0;
 	const executable = bridgeExecutable(options);
 	if (!executable) return -1;
 	const argv = [executable, "event-ephemeral", grant.project, grant.cwd, executionId, event];
@@ -286,7 +310,7 @@ async function bridgeEphemeralEvent(
 	return (await invokeBridge(argv, options)).code;
 }
 
-export async function authorizeEphemeralPath(
+export async function authorizePath(
 	target: string,
 	operation: "read" | "write" | "edit" | "execute",
 	signal?: AbortSignal,
@@ -296,11 +320,21 @@ export async function authorizeEphemeralPath(
 	if (!required) return;
 	const executable = bridgeExecutable(options);
 	if (!executable) throw new Error("SESSION_FENCE_UNAVAILABLE");
-	const outcome = await invokeBridge([executable, "authorize-ephemeral-path", operation, target], options, signal);
-	if (outcome.code !== 0) throw new Error("EPHEMERAL_AUTHORITY_DENIED");
+	const outcome = await invokeBridge([executable, "authorize-path", operation, target], options, signal);
+	if (outcome.code !== 0) throw new Error("EXECUTION_AUTHORITY_DENIED");
 }
 
-function sandboxArgv(grant: EphemeralExecutionGrant, executable: string, command: string): string[] {
+/** Compatibility alias. New callers use filesystem-resolved authorizePath. */
+export async function authorizeEphemeralPath(
+	target: string,
+	operation: "read" | "write" | "edit" | "execute",
+	signal?: AbortSignal,
+	options: StandaloneBashOptions = {},
+): Promise<void> {
+	return authorizePath(target, operation, signal, options);
+}
+
+function sandboxArgv(grant: ExecutionGrant, executable: string, command: string): string[] {
 	const argv = [
 		executable,
 		"--die-with-parent",
@@ -328,13 +362,23 @@ export async function runStandaloneBash(
 	const identity = resolveExecutionIdentity(options.durableIdentity);
 	if (ctx.signal?.aborted) throw ctx.signal.reason ?? new Error("Aborted");
 	const required = options.fenceRequired ?? process.env.OMP_KITCONTROL_SESSION_FENCE_REQUIRED === "1";
-	let grant: EphemeralExecutionGrant | undefined;
+	let requestedCwd: string;
+	try {
+		requestedCwd = resolveRequestedCwd(args, ctx);
+	} catch (error) {
+		return { text: error instanceof Error ? error.message : String(error), isError: true };
+	}
+
+	let grant: ExecutionGrant | undefined;
 	if (identity) {
+		if (args.cwd && requestedCwd !== resolve(ctx.cwd)) {
+			return { text: "WORKSPACE_ESCAPE: legacy durable context cannot change cwd", isError: true };
+		}
 		const status = await bridgeCall(identity, "validate", options, ctx.signal);
 		if (status === 42) return { text: "SESSION_SUPERSEDED", isError: true };
 		if (required && status !== 0) return { text: "SESSION_FENCE_UNAVAILABLE", isError: true };
 	} else if (required) {
-		grant = await requestEphemeralGrant(ctx.cwd, options, ctx.signal);
+		grant = await requestExecutionGrant(requestedCwd, options, ctx.signal);
 		if (!grant) return { text: "SESSION_FENCE_UNAVAILABLE", isError: true };
 	}
 
@@ -388,7 +432,7 @@ export async function runStandaloneBash(
 					)
 				: ["bash", "-lc", rewritten.command];
 			proc = Bun.spawn(argv, {
-				cwd: ctx.cwd,
+				cwd: requestedCwd,
 				env,
 				stdout: "pipe",
 				stderr: "pipe",
