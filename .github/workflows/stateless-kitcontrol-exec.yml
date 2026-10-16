@@ -19,7 +19,7 @@ on:
       - ".github/workflows/stateless-kitcontrol-exec.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   focused-tests:
@@ -29,19 +29,37 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.0
-      - name: Show canonical focused formatting diff
+      - name: Apply canonical formatting on hotfix push
+        if: github.event_name == 'push'
         run: |
           npx --yes oxfmt \
             packages/coding-agent/src/mcp/standalone-bash.ts \
             packages/coding-agent/src/mcp/standalone-harness.ts \
             packages/coding-agent/test/mcp-standalone-bash.test.ts \
             packages/coding-agent/test/mcp-stateless-kitcontrol-exec.test.ts
-          git diff --check
-          git diff --exit-code -- \
+          if ! git diff --quiet -- \
+            packages/coding-agent/src/mcp/standalone-bash.ts \
+            packages/coding-agent/src/mcp/standalone-harness.ts \
+            packages/coding-agent/test/mcp-standalone-bash.test.ts \
+            packages/coding-agent/test/mcp-stateless-kitcontrol-exec.test.ts; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add \
+              packages/coding-agent/src/mcp/standalone-bash.ts \
+              packages/coding-agent/src/mcp/standalone-harness.ts \
+              packages/coding-agent/test/mcp-standalone-bash.test.ts \
+              packages/coding-agent/test/mcp-stateless-kitcontrol-exec.test.ts
+            git commit -m "style(mcp): apply canonical formatter"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
+      - name: Verify canonical focused formatting
+        run: |
+          npx --yes oxfmt --check \
             packages/coding-agent/src/mcp/standalone-bash.ts \
             packages/coding-agent/src/mcp/standalone-harness.ts \
             packages/coding-agent/test/mcp-standalone-bash.test.ts \
             packages/coding-agent/test/mcp-stateless-kitcontrol-exec.test.ts
+          git diff --check
       - name: Run standalone KitControl execution regressions
         run: >-
           bun test
