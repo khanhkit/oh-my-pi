@@ -1,0 +1,36 @@
+name: stateless-kitcontrol-exec
+
+on:
+  pull_request:
+    paths:
+      - "packages/coding-agent/src/mcp/standalone-bash.ts"
+      - "packages/coding-agent/src/mcp/standalone-harness.ts"
+      - "packages/coding-agent/test/mcp-standalone-bash.test.ts"
+      - "packages/coding-agent/test/mcp-stateless-kitcontrol-exec.test.ts"
+      - ".github/workflows/stateless-kitcontrol-exec.yml"
+  push:
+    branches:
+      - "hotfix/**"
+    paths:
+      - "packages/coding-agent/src/mcp/standalone-bash.ts"
+      - "packages/coding-agent/src/mcp/standalone-harness.ts"
+      - "packages/coding-agent/test/mcp-standalone-bash.test.ts"
+      - "packages/coding-agent/test/mcp-stateless-kitcontrol-exec.test.ts"
+      - ".github/workflows/stateless-kitcontrol-exec.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  focused-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Run standalone KitControl execution regressions
+        run: >-
+          bun test
+          packages/coding-agent/test/mcp-standalone-bash.test.ts
+          packages/coding-agent/test/mcp-stateless-kitcontrol-exec.test.ts
