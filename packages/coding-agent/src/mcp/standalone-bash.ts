@@ -29,6 +29,8 @@ export interface ExecutionIdentity {
 	executionId: string;
 }
 
+const KITCONTROL_ACTOR_RE = /^Kit[A-Za-z_]*[1-9][0-9]*$/;
+
 function terminateProcessTree(proc: { pid: number; kill(signal?: number | NodeJS.Signals): void }): void {
 	if (process.platform !== "win32") {
 		try {
@@ -52,8 +54,8 @@ export function resolveExecutionIdentity(args: StandaloneBashArgs): ExecutionIde
 
 	if (!hasWorker && !hasEpoch && !hasExecutionId) return undefined;
 	if (!hasWorker || !hasEpoch) throw new Error("worker and session_epoch must be provided together");
-	if (typeof args.worker !== "string" || !/^KitDev[1-9][0-9]*$/.test(args.worker)) {
-		throw new Error("worker must be a valid KitDev worker name");
+	if (typeof args.worker !== "string" || !KITCONTROL_ACTOR_RE.test(args.worker)) {
+		throw new Error("worker must be a valid durable KitControl actor name");
 	}
 	if (!Number.isSafeInteger(args.session_epoch) || args.session_epoch! <= 0) {
 		throw new Error("session_epoch must be a positive integer");
