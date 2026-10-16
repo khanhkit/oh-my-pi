@@ -37,7 +37,7 @@ describe("trusted durable Bash attribution", () => {
 	});
 
 	test("validates actor names and positive integer epochs", () => {
-		expect(() => resolveExecutionIdentity({ worker: "dev19", sessionEpoch: 1 })).toThrow();
+		expect(() => resolveExecutionIdentity({ worker: "dev-19", sessionEpoch: 1 })).toThrow();
 		expect(() => resolveExecutionIdentity({ worker: "KitDev19", sessionEpoch: 0 })).toThrow();
 		expect(() => resolveExecutionIdentity({ worker: "KitDev19", sessionEpoch: 1.5 })).toThrow();
 	});
