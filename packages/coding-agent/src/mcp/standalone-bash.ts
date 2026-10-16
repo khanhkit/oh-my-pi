@@ -448,11 +448,12 @@ export async function runStandaloneBash(
 			terminateProcessTree(proc);
 			finish("EXEC_ABORT", proc.pid);
 		};
-		heartbeat = identity || grant
-			? setInterval(() => {
-					if (!terminal) emit("EXEC_HEARTBEAT", proc.pid);
-				}, options.heartbeatMs ?? 30_000)
-			: undefined;
+		heartbeat =
+			identity || grant
+				? setInterval(() => {
+						if (!terminal) emit("EXEC_HEARTBEAT", proc.pid);
+					}, options.heartbeatMs ?? 30_000)
+				: undefined;
 		ctx.signal?.addEventListener("abort", onAbort, { once: true });
 		let stdout: string;
 		let stderr: string;

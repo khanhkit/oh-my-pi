@@ -268,7 +268,8 @@ export function createStandaloneTools(): StandaloneTool[] {
 					command: { type: "string", description: "Shell command to execute." },
 					cwd: {
 						type: "string",
-						description: "Optional execution directory inside the workspace. This selects task scope, not identity.",
+						description:
+							"Optional execution directory inside the workspace. This selects task scope, not identity.",
 					},
 				},
 				required: ["command"],

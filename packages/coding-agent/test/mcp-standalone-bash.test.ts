@@ -57,7 +57,10 @@ describe("trusted durable Bash attribution", () => {
 		const result = await runStandaloneBash(
 			{ command },
 			{ cwd },
-			{ rtkExecutable: "/missing", durableIdentity: durable({ worker: "KitDev19", sessionEpoch: 9, executionId: "exec-env" }) },
+			{
+				rtkExecutable: "/missing",
+				durableIdentity: durable({ worker: "KitDev19", sessionEpoch: 9, executionId: "exec-env" }),
+			},
 		);
 		expect(result).toEqual({ text: "KitDev19|9|exec-env", isError: false });
 	});
@@ -183,18 +186,28 @@ describe("KitControl durable execution bridge", () => {
 		const result = await runStandaloneBash(
 			{ command: "printf validated" },
 			{ cwd },
-			{ bridgeExecutable: bridge, fenceRequired: true, rtkExecutable: "/missing", durableIdentity: durable({ executionId: "slow-validate" }) },
+			{
+				bridgeExecutable: bridge,
+				fenceRequired: true,
+				rtkExecutable: "/missing",
+				durableIdentity: durable({ executionId: "slow-validate" }),
+			},
 		);
 		expect(result).toEqual({ text: "validated", isError: false });
 	});
 
 	test("rejects stale durable context before RTK or Bash and never downgrades", async () => {
 		const cwd = await workspace();
-		const bridge = await fakeExecutable("if [ \"$1\" = validate ]; then exit 42; fi; exit 0");
+		const bridge = await fakeExecutable('if [ "$1" = validate ]; then exit 42; fi; exit 0');
 		const result = await runStandaloneBash(
 			{ command: "touch forbidden" },
 			{ cwd },
-			{ bridgeExecutable: bridge, fenceRequired: true, rtkExecutable: "/missing", durableIdentity: durable({ sessionEpoch: 1 }) },
+			{
+				bridgeExecutable: bridge,
+				fenceRequired: true,
+				rtkExecutable: "/missing",
+				durableIdentity: durable({ sessionEpoch: 1 }),
+			},
 		);
 		expect(result).toEqual({ text: "SESSION_SUPERSEDED", isError: true });
 		expect(await Bun.file(join(cwd, "forbidden")).exists()).toBe(false);
@@ -217,7 +230,12 @@ describe("KitControl durable execution bridge", () => {
 		const result = await runStandaloneBash(
 			{ command: "printf success" },
 			{ cwd },
-			{ bridgeExecutable: bridge, fenceRequired: true, rtkExecutable: "/missing", durableIdentity: durable({ sessionEpoch: 1, executionId: "test-id" }) },
+			{
+				bridgeExecutable: bridge,
+				fenceRequired: true,
+				rtkExecutable: "/missing",
+				durableIdentity: durable({ sessionEpoch: 1, executionId: "test-id" }),
+			},
 		);
 		expect(result).toEqual({ text: "success", isError: false });
 		await Bun.sleep(100);
@@ -231,11 +249,19 @@ describe("KitControl durable execution bridge", () => {
 describe("KitControl durable lifecycle regressions", () => {
 	test("durably records START before terminal when START delivery is slower", async () => {
 		const cwd = await workspace();
-		const bridge = await fakeExecutable(`if [ "$1" = validate ]; then exit 0; fi; if [ "\${5:-}" = EXEC_START ]; then sleep 0.20; fi; printf '%s\\n' "$*" >> '${cwd}/events'`);
+		const bridge = await fakeExecutable(
+			`if [ "$1" = validate ]; then exit 0; fi; if [ "\${5:-}" = EXEC_START ]; then sleep 0.20; fi; printf '%s\\n' "$*" >> '${cwd}/events'`,
+		);
 		const result = await runStandaloneBash(
 			{ command: "true" },
 			{ cwd },
-			{ bridgeExecutable: bridge, fenceRequired: true, bridgeTimeoutMs: 1000, rtkExecutable: "/missing", durableIdentity: durable({ executionId: "ordered" }) },
+			{
+				bridgeExecutable: bridge,
+				fenceRequired: true,
+				bridgeTimeoutMs: 1000,
+				rtkExecutable: "/missing",
+				durableIdentity: durable({ executionId: "ordered" }),
+			},
 		);
 		expect(result).toEqual({ text: "(exit 0)", isError: false });
 		await Bun.sleep(300);
@@ -252,14 +278,22 @@ describe("KitControl durable lifecycle regressions", () => {
 		await runStandaloneBash(
 			{ command: "sleep 0.16" },
 			{ cwd },
-			{ bridgeExecutable: bridge, fenceRequired: true, heartbeatMs: 25, rtkExecutable: "/missing", durableIdentity: durable() },
+			{
+				bridgeExecutable: bridge,
+				fenceRequired: true,
+				heartbeatMs: 25,
+				rtkExecutable: "/missing",
+				durableIdentity: durable(),
+			},
 		);
 		await Bun.sleep(100);
 		const before = (await Bun.file(join(cwd, "events")).text()).split("\n");
 		expect(before.filter(x => x.includes("EXEC_HEARTBEAT")).length).toBeGreaterThanOrEqual(2);
 		expect(before.filter(x => x.includes("EXEC_END")).length).toBe(1);
 		await Bun.sleep(80);
-		expect((await Bun.file(join(cwd, "events")).text()).split("\n").filter(x => x.includes("EXEC_HEARTBEAT")).length).toBe(before.filter(x => x.includes("EXEC_HEARTBEAT")).length);
+		expect(
+			(await Bun.file(join(cwd, "events")).text()).split("\n").filter(x => x.includes("EXEC_HEARTBEAT")).length,
+		).toBe(before.filter(x => x.includes("EXEC_HEARTBEAT")).length);
 	});
 
 	test("event bridge failures do not alter command result", async () => {
@@ -268,7 +302,13 @@ describe("KitControl durable lifecycle regressions", () => {
 		const result = await runStandaloneBash(
 			{ command: "printf ok" },
 			{ cwd },
-			{ bridgeExecutable: bridge, bridgeTimeoutMs: 15, fenceRequired: true, rtkExecutable: "/missing", durableIdentity: durable() },
+			{
+				bridgeExecutable: bridge,
+				bridgeTimeoutMs: 15,
+				fenceRequired: true,
+				rtkExecutable: "/missing",
+				durableIdentity: durable(),
+			},
 		);
 		expect(result).toEqual({ text: "ok", isError: false });
 	});
@@ -280,7 +320,13 @@ describe("KitControl durable lifecycle regressions", () => {
 		const running = runStandaloneBash(
 			{ command: "sleep 3" },
 			{ cwd, signal: controller.signal },
-			{ bridgeExecutable: bridge, fenceRequired: true, heartbeatMs: 20, rtkExecutable: "/missing", durableIdentity: durable() },
+			{
+				bridgeExecutable: bridge,
+				fenceRequired: true,
+				heartbeatMs: 20,
+				rtkExecutable: "/missing",
+				durableIdentity: durable(),
+			},
 		);
 		await Bun.sleep(90);
 		controller.abort();
