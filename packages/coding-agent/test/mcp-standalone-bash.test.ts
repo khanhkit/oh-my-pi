@@ -102,12 +102,12 @@ describe("standalone Bash RTK rewrite", () => {
 });
 
 describe("standalone Bash harness contract", () => {
-	test("descriptor exposes command only", () => {
+	test("descriptor exposes task inputs but no control metadata", () => {
 		const harness = new StandaloneHarness("/tmp", createStandaloneTools());
 		const bash = harness.getTool("bash");
 		const parameters = bash?.parameters as { properties?: Record<string, unknown>; required?: string[] };
 		expect(parameters.required).toEqual(["command"]);
-		expect(Object.keys(parameters.properties ?? {})).toEqual(["command"]);
+		expect(Object.keys(parameters.properties ?? {})).toEqual(["command", "cwd"]);
 	});
 
 	test("rejects model-supplied control metadata instead of treating it as authority", async () => {
