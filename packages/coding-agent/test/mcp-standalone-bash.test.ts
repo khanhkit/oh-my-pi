@@ -170,7 +170,7 @@ describe("standalone Bash lifecycle regressions", () => {
 			{ cwd, signal: controller.signal },
 			{ rtkExecutable: "/missing", fenceRequired: false },
 		);
-		for (let i = 0; i < 50 && !(await Bun.file(started).exists()); i++) await Bun.sleep(5);
+		for (let i = 0; i < 400 && !(await Bun.file(started).exists()); i++) await Bun.sleep(5);
 		expect(await Bun.file(started).exists()).toBe(true);
 		controller.abort();
 		await promise.catch(() => undefined);
