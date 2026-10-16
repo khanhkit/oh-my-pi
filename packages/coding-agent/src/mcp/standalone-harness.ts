@@ -10,7 +10,6 @@
  */
 import { mkdir, readFile, readdir, realpath, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { authorizeEphemeralPath, runStandaloneBash } from "./standalone-bash";
 import type {
 	HarnessSessionInterface,
 	ToolDescriptor,
@@ -18,6 +17,7 @@ import type {
 	ToolInvocationResult,
 	WorkspacePolicy,
 } from "../harness/types";
+import { authorizePath, runStandaloneBash } from "./standalone-bash";
 
 export interface StandaloneToolContext {
 	readonly cwd: string;
@@ -97,7 +97,7 @@ async function authorizeMutation(
 	signal?: AbortSignal,
 ): Promise<string> {
 	const filePath = await resolveMutationTarget(cwd, target);
-	await authorizeEphemeralPath(filePath, operation, signal);
+	await authorizePath(filePath, operation, signal);
 	return filePath;
 }
 
@@ -261,17 +261,22 @@ export function createStandaloneTools(): StandaloneTool[] {
 		},
 		{
 			name: "bash",
-			description: "Execute a shell command in the workspace root and return combined output.",
+			description: "Execute a shell command in the workspace and return combined output.",
 			parameters: {
 				type: "object",
 				properties: {
 					command: { type: "string", description: "Shell command to execute." },
+					cwd: {
+						type: "string",
+						description: "Optional execution directory inside the workspace. This selects task scope, not identity.",
+					},
 				},
 				required: ["command"],
 			},
 			execution: true,
 			async run(args, ctx) {
-				return runStandaloneBash({ command: asString(args.command) }, ctx);
+				const cwd = asString(args.cwd);
+				return runStandaloneBash({ command: asString(args.command), ...(cwd ? { cwd } : {}) }, ctx);
 			},
 		},
 	];
