@@ -1,11 +1,18 @@
 import { randomUUID } from "node:crypto";
+import { isAbsolute, relative, resolve } from "node:path";
 import type { StandaloneToolContext, StandaloneToolResult } from "./standalone-harness";
 
 export interface StandaloneBashArgs {
 	command: string;
-	worker?: string;
-	session_epoch?: number;
-	execution_id?: string;
+	/** Task execution directory relative to the MCP workspace root. Not an authority token. */
+	cwd?: string;
+}
+
+/** Legacy trusted compatibility context. New production calls resolve authority from cwd. */
+export interface DurableExecutionIdentity {
+	worker: string;
+	sessionEpoch: number;
+	executionId?: string;
 }
 
 export interface StandaloneBashOptions {
@@ -15,6 +22,10 @@ export interface StandaloneBashOptions {
 	fenceRequired?: boolean;
 	bridgeTimeoutMs?: number;
 	heartbeatMs?: number;
+	/** Legacy trusted compatibility context. Never expose this in the model tool schema. */
+	durableIdentity?: DurableExecutionIdentity;
+	/** Linux filesystem sandbox used for stateless filesystem-resolved execution. */
+	sandboxExecutable?: string;
 }
 
 export interface RtkRewriteResult {
@@ -27,6 +38,23 @@ export interface ExecutionIdentity {
 	worker: string;
 	sessionEpoch: number;
 	executionId: string;
+}
+
+interface ExecutionGrant {
+	kind: "EPHEMERAL" | "DURABLE";
+	project: string;
+	projects?: string[];
+	worker?: string;
+	generation?: number;
+	scope_root: string;
+	writable_roots?: string[];
+	cwd: string;
+	protected_write_paths?: string[];
+}
+
+interface BridgeOutcome {
+	code: number;
+	stdout: string;
 }
 
 function terminateProcessTree(proc: { pid: number; kill(signal?: number | NodeJS.Signals): void }): void {
@@ -45,27 +73,36 @@ function terminateProcessTree(proc: { pid: number; kill(signal?: number | NodeJS
 	}
 }
 
-export function resolveExecutionIdentity(args: StandaloneBashArgs): ExecutionIdentity | undefined {
-	const hasWorker = args.worker !== undefined;
-	const hasEpoch = args.session_epoch !== undefined;
-	const hasExecutionId = args.execution_id !== undefined;
+function isWithin(target: string, root: string): boolean {
+	const rel = relative(resolve(root), resolve(target));
+	return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
 
-	if (!hasWorker && !hasEpoch && !hasExecutionId) return undefined;
-	if (!hasWorker || !hasEpoch) throw new Error("worker and session_epoch must be provided together");
-	if (typeof args.worker !== "string" || !/^KitDev[1-9][0-9]*$/.test(args.worker)) {
-		throw new Error("worker must be a valid KitDev worker name");
+function resolveRequestedCwd(args: StandaloneBashArgs, ctx: StandaloneToolContext): string {
+	const root = resolve(ctx.cwd);
+	const requested = args.cwd ? resolve(root, args.cwd) : root;
+	if (!isWithin(requested, root)) throw new Error("WORKSPACE_ESCAPE: cwd resolves outside workspace root");
+	return requested;
+}
+
+export function resolveExecutionIdentity(identity?: DurableExecutionIdentity): ExecutionIdentity | undefined {
+	if (!identity) return undefined;
+	if (typeof identity.worker !== "string" || !/^[A-Za-z_]+[1-9][0-9]*$/.test(identity.worker)) {
+		throw new Error("durable worker must be a valid actor name");
 	}
-	if (!Number.isSafeInteger(args.session_epoch) || args.session_epoch! <= 0) {
-		throw new Error("session_epoch must be a positive integer");
+	if (!Number.isSafeInteger(identity.sessionEpoch) || identity.sessionEpoch <= 0) {
+		throw new Error("durable session epoch must be a positive integer");
 	}
-	if (hasExecutionId && (typeof args.execution_id !== "string" || args.execution_id.length === 0)) {
+	if (
+		identity.executionId !== undefined &&
+		(typeof identity.executionId !== "string" || identity.executionId.length === 0)
+	) {
 		throw new Error("execution_id must be a non-empty string");
 	}
-
 	return {
-		worker: args.worker,
-		sessionEpoch: args.session_epoch!,
-		executionId: args.execution_id ?? randomUUID(),
+		worker: identity.worker,
+		sessionEpoch: identity.sessionEpoch,
+		executionId: identity.executionId ?? randomUUID(),
 	};
 }
 
@@ -87,10 +124,10 @@ export async function rewriteWithRtk(
 		options.signal?.addEventListener("abort", onAbort, { once: true });
 		const stdoutPromise = new Response(proc.stdout as ReadableStream<Uint8Array>).text();
 		const completed = Promise.all([stdoutPromise, proc.exited] as const);
-		const timeout = new Promise<"timeout">(resolve => {
+		const timeout = new Promise<"timeout">(resolveTimeout => {
 			timer = setTimeout(() => {
 				if (proc) terminateProcessTree(proc);
-				resolve("timeout");
+				resolveTimeout("timeout");
 			}, options.timeoutMs ?? 250);
 		});
 		const result = await Promise.race([completed, timeout]);
@@ -121,6 +158,62 @@ export async function rewriteWithRtk(
 	}
 }
 
+function bridgeExecutable(options: StandaloneBashOptions): string | undefined {
+	const executable = options.bridgeExecutable ?? process.env.OMP_KITCONTROL_EXEC_BRIDGE;
+	return executable && executable.startsWith("/") ? executable : undefined;
+}
+
+async function invokeBridge(
+	argv: string[],
+	options: StandaloneBashOptions,
+	signal?: AbortSignal,
+): Promise<BridgeOutcome> {
+	if (signal?.aborted) throw signal.reason ?? new Error("Aborted");
+	let proc: ReturnType<typeof Bun.spawn>;
+	try {
+		proc = Bun.spawn(argv, {
+			stdout: "pipe",
+			stderr: "ignore",
+			detached: process.platform !== "win32",
+		});
+	} catch {
+		return { code: -1, stdout: "" };
+	}
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let rejectAbort: (() => void) | undefined;
+	const abort = () => terminateProcessTree(proc);
+	signal?.addEventListener("abort", abort, { once: true });
+	try {
+		const output = new Response(proc.stdout as ReadableStream<Uint8Array>).text();
+		const completed = Promise.all([output, proc.exited] as const);
+		const outcome = await Promise.race([
+			completed,
+			new Promise<"timeout">(resolveTimeout => {
+				timer = setTimeout(() => {
+					terminateProcessTree(proc);
+					resolveTimeout("timeout");
+				}, options.bridgeTimeoutMs ?? 1000);
+			}),
+			new Promise<never>((_, reject) => {
+				if (signal?.aborted) reject(signal.reason ?? new Error("Aborted"));
+				else {
+					rejectAbort = () => reject(signal?.reason ?? new Error("Aborted"));
+					signal?.addEventListener("abort", rejectAbort, { once: true });
+				}
+			}),
+		]);
+		if (outcome === "timeout") {
+			await proc.exited.catch(() => undefined);
+			return { code: -1, stdout: "" };
+		}
+		return { stdout: outcome[0], code: outcome[1] };
+	} finally {
+		if (timer) clearTimeout(timer);
+		signal?.removeEventListener("abort", abort);
+		if (rejectAbort) signal?.removeEventListener("abort", rejectAbort);
+	}
+}
+
 async function bridgeCall(
 	identity: ExecutionIdentity,
 	operation: "validate" | "event",
@@ -130,50 +223,135 @@ async function bridgeCall(
 	pid?: number,
 	exitCode?: number,
 ): Promise<number> {
-	const executable = options.bridgeExecutable ?? process.env.OMP_KITCONTROL_EXEC_BRIDGE;
-	if (!executable || !executable.startsWith("/")) return -1;
-	if (signal?.aborted) throw signal.reason ?? new Error("Aborted");
+	const executable = bridgeExecutable(options);
+	if (!executable) return -1;
 	const argv = [executable, operation, identity.worker, String(identity.sessionEpoch)];
 	if (operation === "event") {
 		argv.push(identity.executionId, event!);
 		if (pid !== undefined) argv.push("--pid", String(pid));
 		if (exitCode !== undefined) argv.push("--exit-code", String(exitCode));
 	}
-	let proc: ReturnType<typeof Bun.spawn>;
+	return (await invokeBridge(argv, options, signal)).code;
+}
+
+function parseExecutionGrant(raw: string, requestedCwd: string): ExecutionGrant | undefined {
 	try {
-		proc = Bun.spawn(argv, { stdout: "ignore", stderr: "ignore", detached: process.platform !== "win32" });
+		const value = JSON.parse(raw) as Partial<ExecutionGrant>;
+		if (
+			(value.kind !== "EPHEMERAL" && value.kind !== "DURABLE") ||
+			typeof value.project !== "string" ||
+			typeof value.scope_root !== "string" ||
+			typeof value.cwd !== "string"
+		) {
+			return undefined;
+		}
+		if (value.kind === "DURABLE") {
+			if (
+				typeof value.worker !== "string" ||
+				value.worker.length === 0 ||
+				!Number.isSafeInteger(value.generation) ||
+				(value.generation ?? 0) <= 0
+			) {
+				return undefined;
+			}
+		}
+		const cwd = resolve(value.cwd);
+		const scopeRoot = resolve(value.scope_root);
+		if (cwd !== resolve(requestedCwd) || !isWithin(cwd, scopeRoot)) return undefined;
+		const writableRoots = value.writable_roots ?? [value.scope_root];
+		if (!Array.isArray(writableRoots) || writableRoots.length === 0) return undefined;
+		for (const root of writableRoots) {
+			if (typeof root !== "string" || !isWithin(resolve(root), scopeRoot)) return undefined;
+		}
+		const protectedPaths = value.protected_write_paths ?? [];
+		if (!Array.isArray(protectedPaths) || protectedPaths.some(path => typeof path !== "string")) return undefined;
+		return {
+			kind: value.kind,
+			project: value.project,
+			projects: value.projects,
+			worker: value.worker,
+			generation: value.generation,
+			scope_root: scopeRoot,
+			writable_roots: writableRoots.map(root => resolve(root)),
+			cwd,
+			protected_write_paths: protectedPaths.map(path => resolve(path)),
+		};
 	} catch {
-		return -1;
+		return undefined;
 	}
-	let timer: ReturnType<typeof setTimeout> | undefined;
-	let rejectAbort: (() => void) | undefined;
-	const abort = () => terminateProcessTree(proc);
-	signal?.addEventListener("abort", abort, { once: true });
-	try {
-		const timeoutMs = options.bridgeTimeoutMs ?? 1000;
-		const outcome = await Promise.race([
-			proc.exited,
-			new Promise<number>(resolve => {
-				timer = setTimeout(() => {
-					terminateProcessTree(proc);
-					resolve(-1);
-				}, timeoutMs);
-			}),
-			new Promise<number>((_, reject) => {
-				if (signal?.aborted) reject(signal.reason ?? new Error("Aborted"));
-				else {
-					rejectAbort = () => reject(signal?.reason ?? new Error("Aborted"));
-					signal?.addEventListener("abort", rejectAbort, { once: true });
-				}
-			}),
-		]);
-		if (outcome === -1) await proc.exited.catch(() => undefined);
-		return outcome;
-	} finally {
-		if (timer) clearTimeout(timer);
-		signal?.removeEventListener("abort", abort);
-		if (rejectAbort) signal?.removeEventListener("abort", rejectAbort);
-	}
+}
+
+async function requestExecutionGrant(
+	cwd: string,
+	options: StandaloneBashOptions,
+	signal?: AbortSignal,
+): Promise<ExecutionGrant | undefined> {
+	const executable = bridgeExecutable(options);
+	if (!executable) return undefined;
+	const outcome = await invokeBridge([executable, "grant-execution", cwd], options, signal);
+	if (outcome.code !== 0) return undefined;
+	return parseExecutionGrant(outcome.stdout, cwd);
+}
+
+async function bridgeEphemeralEvent(
+	grant: ExecutionGrant,
+	executionId: string,
+	event: string,
+	options: StandaloneBashOptions,
+	pid?: number,
+	exitCode?: number,
+): Promise<number> {
+	if (grant.kind !== "EPHEMERAL" || grant.project === "MULTI_PROJECT") return 0;
+	const executable = bridgeExecutable(options);
+	if (!executable) return -1;
+	const argv = [executable, "event-ephemeral", grant.project, grant.cwd, executionId, event];
+	if (pid !== undefined) argv.push("--pid", String(pid));
+	if (exitCode !== undefined) argv.push("--exit-code", String(exitCode));
+	return (await invokeBridge(argv, options)).code;
+}
+
+export async function authorizePath(
+	target: string,
+	operation: "read" | "write" | "edit" | "execute",
+	signal?: AbortSignal,
+	options: StandaloneBashOptions = {},
+): Promise<void> {
+	const required = options.fenceRequired ?? process.env.OMP_KITCONTROL_SESSION_FENCE_REQUIRED === "1";
+	if (!required) return;
+	const executable = bridgeExecutable(options);
+	if (!executable) throw new Error("SESSION_FENCE_UNAVAILABLE");
+	const outcome = await invokeBridge([executable, "authorize-path", operation, target], options, signal);
+	if (outcome.code !== 0) throw new Error("EXECUTION_AUTHORITY_DENIED");
+}
+
+/** Compatibility alias. New callers use filesystem-resolved authorizePath. */
+export async function authorizeEphemeralPath(
+	target: string,
+	operation: "read" | "write" | "edit" | "execute",
+	signal?: AbortSignal,
+	options: StandaloneBashOptions = {},
+): Promise<void> {
+	return authorizePath(target, operation, signal, options);
+}
+
+function sandboxArgv(grant: ExecutionGrant, executable: string, command: string): string[] {
+	const argv = [
+		executable,
+		"--die-with-parent",
+		"--ro-bind",
+		"/",
+		"/",
+		"--dev",
+		"/dev",
+		"--proc",
+		"/proc",
+		"--tmpfs",
+		"/tmp",
+	];
+	for (const root of grant.writable_roots ?? [grant.scope_root]) argv.push("--bind", root, root);
+	for (const path of grant.protected_write_paths ?? []) argv.push("--ro-bind", path, path);
+	argv.push("--chdir", grant.cwd, "--", "bash", "-lc", command);
+	return argv;
 }
 
 export async function runStandaloneBash(
@@ -181,19 +359,38 @@ export async function runStandaloneBash(
 	ctx: StandaloneToolContext,
 	options: StandaloneBashOptions = {},
 ): Promise<StandaloneToolResult> {
-	const identity = resolveExecutionIdentity(args);
+	const identity = resolveExecutionIdentity(options.durableIdentity);
 	if (ctx.signal?.aborted) throw ctx.signal.reason ?? new Error("Aborted");
 	const required = options.fenceRequired ?? process.env.OMP_KITCONTROL_SESSION_FENCE_REQUIRED === "1";
+	let requestedCwd: string;
+	try {
+		requestedCwd = resolveRequestedCwd(args, ctx);
+	} catch (error) {
+		return { text: error instanceof Error ? error.message : String(error), isError: true };
+	}
+
+	let grant: ExecutionGrant | undefined;
 	if (identity) {
+		if (args.cwd && requestedCwd !== resolve(ctx.cwd)) {
+			return { text: "WORKSPACE_ESCAPE: legacy durable context cannot change cwd", isError: true };
+		}
 		const status = await bridgeCall(identity, "validate", options, ctx.signal);
 		if (status === 42) return { text: "SESSION_SUPERSEDED", isError: true };
 		if (required && status !== 0) return { text: "SESSION_FENCE_UNAVAILABLE", isError: true };
+	} else if (required) {
+		grant = await requestExecutionGrant(requestedCwd, options, ctx.signal);
+		if (!grant) return { text: "SESSION_FENCE_UNAVAILABLE", isError: true };
 	}
+
+	const executionId = identity?.executionId ?? (grant ? randomUUID() : undefined);
 	let telemetry = Promise.resolve();
 	const emit = (event: string, pid?: number, code?: number) => {
-		if (!identity) return;
+		if (!identity && !grant) return;
 		telemetry = telemetry
-			.then(() => bridgeCall(identity, "event", options, undefined, event, pid, code))
+			.then(async () => {
+				if (identity) await bridgeCall(identity, "event", options, undefined, event, pid, code);
+				else if (grant && executionId) await bridgeEphemeralEvent(grant, executionId, event, options, pid, code);
+			})
 			.then(
 				() => undefined,
 				() => undefined,
@@ -209,6 +406,7 @@ export async function runStandaloneBash(
 			emit(event, pid, code);
 		}
 	};
+
 	try {
 		const rewritten = await rewriteWithRtk(args.command, { ...options, signal: ctx.signal });
 		if (ctx.signal?.aborted) throw ctx.signal.reason ?? new Error("Aborted");
@@ -220,33 +418,50 @@ export async function runStandaloneBash(
 		} else {
 			delete env.KIT_WORKER;
 			delete env.KIT_SESSION_EPOCH;
-			delete env.KIT_EXECUTION_ID;
+			if (executionId) env.KIT_EXECUTION_ID = executionId;
+			else delete env.KIT_EXECUTION_ID;
 		}
 
-		const proc = Bun.spawn(["bash", "-lc", rewritten.command], {
-			cwd: ctx.cwd,
-			env,
-			stdout: "pipe",
-			stderr: "pipe",
-			detached: process.platform !== "win32",
-		});
+		let proc: ReturnType<typeof Bun.spawn>;
+		try {
+			const argv = grant
+				? sandboxArgv(
+						grant,
+						options.sandboxExecutable ?? process.env.OMP_KITCONTROL_EPHEMERAL_SANDBOX ?? "bwrap",
+						rewritten.command,
+					)
+				: ["bash", "-lc", rewritten.command];
+			proc = Bun.spawn(argv, {
+				cwd: requestedCwd,
+				env,
+				stdout: "pipe",
+				stderr: "pipe",
+				detached: process.platform !== "win32",
+			});
+		} catch (error) {
+			finish("EXEC_ERROR");
+			if (grant) return { text: "EPHEMERAL_SANDBOX_UNAVAILABLE", isError: true };
+			throw error;
+		}
+
 		const onAbort = () => {
 			terminateProcessTree(proc);
 			finish("EXEC_ABORT", proc.pid);
 		};
-		heartbeat = identity
-			? setInterval(() => {
-					if (!terminal) emit("EXEC_HEARTBEAT", proc.pid);
-				}, options.heartbeatMs ?? 30_000)
-			: undefined;
+		heartbeat =
+			identity || grant
+				? setInterval(() => {
+						if (!terminal) emit("EXEC_HEARTBEAT", proc.pid);
+					}, options.heartbeatMs ?? 30_000)
+				: undefined;
 		ctx.signal?.addEventListener("abort", onAbort, { once: true });
 		let stdout: string;
 		let stderr: string;
 		let exitCode: number;
 		try {
 			[stdout, stderr, exitCode] = await Promise.all([
-				new Response(proc.stdout).text(),
-				new Response(proc.stderr).text(),
+				new Response(proc.stdout as ReadableStream<Uint8Array>).text(),
+				new Response(proc.stderr as ReadableStream<Uint8Array>).text(),
 				proc.exited,
 			]);
 		} finally {
@@ -254,6 +469,9 @@ export async function runStandaloneBash(
 			if (heartbeat) clearInterval(heartbeat);
 		}
 		finish("EXEC_END", proc.pid, exitCode);
+		if (grant && exitCode !== 0 && stderr.trimStart().startsWith("bwrap:")) {
+			return { text: "EPHEMERAL_SANDBOX_UNAVAILABLE", isError: true };
+		}
 		const combined = [stdout, stderr]
 			.filter(part => part.length > 0)
 			.join("\n")

@@ -8,9 +8,8 @@
  * chain. Plugin/custom tools are discovered best-effort from trusted local
  * directories and registered alongside the built-ins.
  */
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, realpath, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { runStandaloneBash, type StandaloneBashArgs } from "./standalone-bash";
 import type {
 	HarnessSessionInterface,
 	ToolDescriptor,
@@ -18,6 +17,7 @@ import type {
 	ToolInvocationResult,
 	WorkspacePolicy,
 } from "../harness/types";
+import { authorizePath, runStandaloneBash } from "./standalone-bash";
 
 export interface StandaloneToolContext {
 	readonly cwd: string;
@@ -40,7 +40,7 @@ export interface StandaloneTool {
 	run(args: Record<string, unknown>, ctx: StandaloneToolContext): Promise<StandaloneToolResult>;
 }
 
-/** Resolve a path and reject anything that escapes the workspace root. */
+/** Resolve a path lexically and reject anything that escapes the workspace root. */
 export function resolveWithin(cwd: string, target: string): string {
 	const abs = isAbsolute(target) ? resolve(target) : resolve(cwd, target);
 	const rel = relative(cwd, abs);
@@ -49,6 +49,56 @@ export function resolveWithin(cwd: string, target: string): string {
 		throw new Error(`WORKSPACE_ESCAPE: path "${target}" resolves outside workspace root`);
 	}
 	return abs;
+}
+
+function assertRealPathWithin(root: string, target: string, display: string): void {
+	const rel = relative(root, target);
+	if (rel !== "" && (rel.startsWith("..") || isAbsolute(rel))) {
+		throw new Error(`WORKSPACE_ESCAPE: path "${display}" resolves outside workspace root`);
+	}
+}
+
+async function resolveExistingWithin(cwd: string, target: string): Promise<string> {
+	const lexical = resolveWithin(cwd, target);
+	const [rootReal, targetReal] = await Promise.all([realpath(cwd), realpath(lexical)]);
+	assertRealPathWithin(rootReal, targetReal, target);
+	return lexical;
+}
+
+/**
+ * Validate existing symlink components before a write. The nearest existing
+ * ancestor is resolved through the kernel, so a symlinked parent or existing
+ * target cannot redirect the mutation outside the workspace.
+ */
+async function resolveMutationTarget(cwd: string, target: string): Promise<string> {
+	const lexical = resolveWithin(cwd, target);
+	const rootReal = await realpath(cwd);
+	let probe = lexical;
+	for (;;) {
+		try {
+			const probeReal = await realpath(probe);
+			const suffix = relative(probe, lexical);
+			const candidate = suffix ? resolve(probeReal, suffix) : probeReal;
+			assertRealPathWithin(rootReal, candidate, target);
+			return lexical;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+			const parent = dirname(probe);
+			if (parent === probe) throw error;
+			probe = parent;
+		}
+	}
+}
+
+async function authorizeMutation(
+	cwd: string,
+	target: string,
+	operation: "write" | "edit",
+	signal?: AbortSignal,
+): Promise<string> {
+	const filePath = await resolveMutationTarget(cwd, target);
+	await authorizePath(filePath, operation, signal);
+	return filePath;
 }
 
 function asString(value: unknown, fallback = ""): string {
@@ -75,7 +125,7 @@ export function createStandaloneTools(): StandaloneTool[] {
 			},
 			async run(args, ctx) {
 				const target = asString(args.filePath ?? args.path);
-				const filePath = resolveWithin(ctx.cwd, target);
+				const filePath = await resolveExistingWithin(ctx.cwd, target);
 				const content = await readFile(filePath, "utf8");
 				const lines = content.split("\n");
 				const offset = asNumber(args.offset) ?? 0;
@@ -97,7 +147,8 @@ export function createStandaloneTools(): StandaloneTool[] {
 			},
 			write: true,
 			async run(args, ctx) {
-				const filePath = resolveWithin(ctx.cwd, asString(args.filePath ?? args.path));
+				const target = asString(args.filePath ?? args.path);
+				const filePath = await authorizeMutation(ctx.cwd, target, "write", ctx.signal);
 				await mkdir(dirname(filePath), { recursive: true });
 				await writeFile(filePath, asString(args.content), "utf8");
 				return { text: `Wrote ${filePath}` };
@@ -117,7 +168,8 @@ export function createStandaloneTools(): StandaloneTool[] {
 			},
 			write: true,
 			async run(args, ctx) {
-				const filePath = resolveWithin(ctx.cwd, asString(args.filePath ?? args.path));
+				const target = asString(args.filePath ?? args.path);
+				const filePath = await authorizeMutation(ctx.cwd, target, "edit", ctx.signal);
 				const content = await readFile(filePath, "utf8");
 				const oldString = asString(args.oldString);
 				const newString = asString(args.newString);
@@ -171,7 +223,8 @@ export function createStandaloneTools(): StandaloneTool[] {
 				for await (const file of glob.scan({ cwd: ctx.cwd, dot: false })) {
 					if (matches.length >= 200) break;
 					try {
-						const content = await readFile(resolve(ctx.cwd, file), "utf8");
+						const filePath = await resolveExistingWithin(ctx.cwd, file);
+						const content = await readFile(filePath, "utf8");
 						const lines = content.split("\n");
 						for (let i = 0; i < lines.length; i++) {
 							if (regex.test(lines[i])) {
@@ -180,7 +233,7 @@ export function createStandaloneTools(): StandaloneTool[] {
 							}
 						}
 					} catch {
-						// Skip unreadable/binary files.
+						// Skip unreadable/binary/escaping symlink files.
 					}
 				}
 				return { text: matches.join("\n") || "(no matches)" };
@@ -199,7 +252,8 @@ export function createStandaloneTools(): StandaloneTool[] {
 				},
 			},
 			async run(args, ctx) {
-				const dirPath = resolveWithin(ctx.cwd, asString(args.dirPath ?? args.path, "."));
+				const target = asString(args.dirPath ?? args.path, ".");
+				const dirPath = await resolveExistingWithin(ctx.cwd, target);
 				const entries = await readdir(dirPath, { withFileTypes: true });
 				const rendered = entries.map(entry => (entry.isDirectory() ? `${entry.name}/` : entry.name));
 				return { text: rendered.join("\n") || "(empty)" };
@@ -207,28 +261,23 @@ export function createStandaloneTools(): StandaloneTool[] {
 		},
 		{
 			name: "bash",
-			description: "Execute a shell command in the workspace root and return combined output.",
+			description: "Execute a shell command in the workspace and return combined output.",
 			parameters: {
 				type: "object",
 				properties: {
 					command: { type: "string", description: "Shell command to execute." },
-					worker: { type: "string", description: "Optional KitDev worker attribution." },
-					session_epoch: { type: "integer", description: "Optional positive KitDev session epoch." },
-					execution_id: { type: "string", description: "Optional execution identifier." },
+					cwd: {
+						type: "string",
+						description:
+							"Optional execution directory inside the workspace. This selects task scope, not identity.",
+					},
 				},
 				required: ["command"],
 			},
 			execution: true,
 			async run(args, ctx) {
-				return runStandaloneBash(
-					{
-						command: asString(args.command),
-						worker: args.worker as StandaloneBashArgs["worker"],
-						session_epoch: args.session_epoch as StandaloneBashArgs["session_epoch"],
-						execution_id: args.execution_id as StandaloneBashArgs["execution_id"],
-					},
-					ctx,
-				);
+				const cwd = asString(args.cwd);
+				return runStandaloneBash({ command: asString(args.command), ...(cwd ? { cwd } : {}) }, ctx);
 			},
 		},
 	];
@@ -286,6 +335,20 @@ export class StandaloneHarness implements HarnessSessionInterface {
 				isError: true,
 			};
 		}
+
+		const schema = tool.parameters as { properties?: Record<string, unknown> };
+		if (schema.properties) {
+			const unknown = Object.keys(request.arguments).find(key => !(key in schema.properties!));
+			if (unknown) {
+				return {
+					callId: request.callId,
+					toolName: request.toolName,
+					content: [{ type: "text", text: `Unknown argument for ${request.toolName}: ${unknown}` }],
+					isError: true,
+				};
+			}
+		}
+
 		try {
 			const result = await tool.run(request.arguments, {
 				cwd: this.workspacePolicy.cwd,
