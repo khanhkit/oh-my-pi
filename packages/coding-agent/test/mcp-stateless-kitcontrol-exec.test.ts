@@ -31,24 +31,27 @@ async function executable(body: string): Promise<string> {
 }
 
 describe("stateless KitControl model surface", () => {
-	test("bash descriptor exposes command only", () => {
+	test("bash descriptor exposes task inputs but no actor/session authority tokens", () => {
 		const harness = new StandaloneHarness("/tmp", createStandaloneTools());
 		const bash = harness.getTool("bash");
 		expect(bash).toBeDefined();
 		const parameters = bash?.parameters as { properties?: Record<string, unknown>; required?: string[] };
 		expect(parameters.required).toEqual(["command"]);
-		expect(Object.keys(parameters.properties ?? {})).toEqual(["command"]);
+		expect(Object.keys(parameters.properties ?? {})).toEqual(["command", "cwd"]);
+		expect(parameters.properties).not.toHaveProperty("worker");
+		expect(parameters.properties).not.toHaveProperty("session_epoch");
+		expect(parameters.properties).not.toHaveProperty("execution_id");
 	});
 });
 
-describe("anonymous KitControl Bash execution", () => {
-	test("obtains a filesystem grant then runs through the sandbox", async () => {
+describe("filesystem-resolved KitControl Bash execution", () => {
+	test("obtains an ephemeral filesystem grant then runs through the sandbox", async () => {
 		const cwd = await workspace();
 		const events = join(cwd, "bridge-events");
 		const bridge = await executable(`
 			printf '%s\\n' "$*" >> ${JSON.stringify(events)}
-			if [ "$1" = grant-ephemeral ]; then
-				printf '{"kind":"EPHEMERAL","project":"Demo","scope_root":%s,"cwd":%s,"protected_write_paths":[]}' ${JSON.stringify(JSON.stringify(cwd))} ${JSON.stringify(JSON.stringify(cwd))}
+			if [ "$1" = grant-execution ]; then
+				printf '{"kind":"EPHEMERAL","project":"Demo","scope_root":%s,"writable_roots":[%s],"cwd":%s,"protected_write_paths":[]}' ${JSON.stringify(JSON.stringify(cwd))} ${JSON.stringify(JSON.stringify(cwd))} ${JSON.stringify(JSON.stringify(cwd))}
 			fi
 		`);
 		const sandboxArgs = join(cwd, "sandbox-args");
@@ -68,18 +71,70 @@ describe("anonymous KitControl Bash execution", () => {
 			},
 		);
 		expect(result).toEqual({ text: "anonymous", isError: false });
-		expect(await readFile(events, "utf8")).toContain(`grant-ephemeral ${cwd}`);
+		expect(await readFile(events, "utf8")).toContain(`grant-execution ${cwd}`);
 		const args = await readFile(sandboxArgs, "utf8");
 		expect(args).toContain("--ro-bind / /");
 		expect(args).toContain(`--bind ${cwd} ${cwd}`);
 	});
 
-	test("fails closed when the anonymous sandbox is unavailable", async () => {
+	test("resolves a durable worktree grant without model actor/session tokens", async () => {
+		const root = await workspace();
+		const durable = join(root, "worker");
+		await Bun.write(join(durable, ".keep"), "x");
+		const bridgeOps = join(root, "bridge-ops");
+		const bridge = await executable(`
+			printf '%s\\n' "$*" >> ${JSON.stringify(bridgeOps)}
+			if [ "$1" = grant-execution ]; then
+				printf '{"kind":"DURABLE","project":"Demo","worker":"KitDev22","generation":7,"scope_root":%s,"writable_roots":[%s],"cwd":%s,"protected_write_paths":[]}' ${JSON.stringify(JSON.stringify(durable))} ${JSON.stringify(JSON.stringify(durable))} ${JSON.stringify(JSON.stringify(durable))}
+			fi
+		`);
+		const sandbox = await executable(`
+			while [ "$#" -gt 0 ] && [ "$1" != bash ]; do shift; done
+			exec "$@"
+		`);
+		const result = await runStandaloneBash(
+			{ command: "pwd", cwd: durable },
+			{ cwd: root },
+			{
+				bridgeExecutable: bridge,
+				fenceRequired: true,
+				sandboxExecutable: sandbox,
+				rtkExecutable: "/missing",
+			},
+		);
+		expect(result).toEqual({ text: durable, isError: false });
+		expect(await readFile(bridgeOps, "utf8")).toContain(`grant-execution ${durable}`);
+	});
+
+	test("fails closed when the filesystem grant cannot be resolved", async () => {
+		const cwd = await workspace();
+		const marker = join(cwd, "must-not-exist");
+		const bridgeOps = join(cwd, "bridge-ops");
+		const bridge = await executable(`
+			printf '%s\\n' "$1" >> ${JSON.stringify(bridgeOps)}
+			if [ "$1" = grant-execution ]; then exit 2; fi
+		`);
+		const result = await runStandaloneBash(
+			{ command: `touch ${JSON.stringify(marker)}` },
+			{ cwd },
+			{
+				bridgeExecutable: bridge,
+				fenceRequired: true,
+				sandboxExecutable: "/definitely/missing/bwrap",
+				rtkExecutable: "/missing",
+			},
+		);
+		expect(result).toEqual({ text: "SESSION_FENCE_UNAVAILABLE", isError: true });
+		expect(await readFile(bridgeOps, "utf8")).toBe("grant-execution\n");
+		expect(await Bun.file(marker).exists()).toBe(false);
+	});
+
+	test("fails closed when the sandbox is unavailable", async () => {
 		const cwd = await workspace();
 		const marker = join(cwd, "must-not-exist");
 		const bridge = await executable(`
-			if [ "$1" = grant-ephemeral ]; then
-				printf '{"kind":"EPHEMERAL","project":"Demo","scope_root":%s,"cwd":%s,"protected_write_paths":[]}' ${JSON.stringify(JSON.stringify(cwd))} ${JSON.stringify(JSON.stringify(cwd))}
+			if [ "$1" = grant-execution ]; then
+				printf '{"kind":"EPHEMERAL","project":"Demo","scope_root":%s,"writable_roots":[%s],"cwd":%s,"protected_write_paths":[]}' ${JSON.stringify(JSON.stringify(cwd))} ${JSON.stringify(JSON.stringify(cwd))} ${JSON.stringify(JSON.stringify(cwd))}
 			fi
 		`);
 		const result = await runStandaloneBash(
@@ -96,14 +151,14 @@ describe("anonymous KitControl Bash execution", () => {
 		expect(await Bun.file(marker).exists()).toBe(false);
 	});
 
-	test("stale durable context never falls back to anonymous execution", async () => {
+	test("legacy stale durable context still never falls back to generic execution", async () => {
 		const cwd = await workspace();
 		const marker = join(cwd, "must-not-exist");
 		const bridgeOps = join(cwd, "bridge-ops");
 		const bridge = await executable(`
 			printf '%s\\n' "$1" >> ${JSON.stringify(bridgeOps)}
 			if [ "$1" = validate ]; then exit 42; fi
-			if [ "$1" = grant-ephemeral ]; then exit 0; fi
+			if [ "$1" = grant-execution ]; then exit 0; fi
 		`);
 		const result = await runStandaloneBash(
 			{ command: `touch ${JSON.stringify(marker)}` },
@@ -123,6 +178,23 @@ describe("anonymous KitControl Bash execution", () => {
 });
 
 describe("standalone file mutation confinement", () => {
+	test("write asks generic filesystem authority rather than chat identity", async () => {
+		const cwd = await workspace();
+		const bridgeOps = join(cwd, "bridge-ops");
+		const bridge = await executable(`printf '%s\\n' "$*" >> ${JSON.stringify(bridgeOps)}`);
+		process.env.OMP_KITCONTROL_SESSION_FENCE_REQUIRED = "1";
+		process.env.OMP_KITCONTROL_EXEC_BRIDGE = bridge;
+		const harness = new StandaloneHarness(cwd, createStandaloneTools());
+		const result = await harness.invokeTool({
+			callId: "write-authority",
+			toolName: "write",
+			arguments: { filePath: "new.txt", content: "ok" },
+		});
+		expect(result.isError).not.toBe(true);
+		expect(await readFile(join(cwd, "new.txt"), "utf8")).toBe("ok");
+		expect(await readFile(bridgeOps, "utf8")).toContain(`authorize-path write ${join(cwd, "new.txt")}`);
+	});
+
 	test("write refuses an existing symlink that resolves outside workspace", async () => {
 		const cwd = await workspace();
 		const outsideDir = await workspace("omp-outside-");
