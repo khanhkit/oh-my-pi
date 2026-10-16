@@ -460,8 +460,8 @@ export async function runStandaloneBash(
 		let exitCode: number;
 		try {
 			[stdout, stderr, exitCode] = await Promise.all([
-				new Response(proc.stdout).text(),
-				new Response(proc.stderr).text(),
+				new Response(proc.stdout as ReadableStream<Uint8Array>).text(),
+				new Response(proc.stderr as ReadableStream<Uint8Array>).text(),
 				proc.exited,
 			]);
 		} finally {
