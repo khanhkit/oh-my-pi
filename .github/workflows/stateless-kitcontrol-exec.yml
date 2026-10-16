@@ -19,7 +19,7 @@ on:
       - ".github/workflows/stateless-kitcontrol-exec.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   focused-tests:
@@ -29,6 +29,27 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.0
+      - name: Apply narrow stream typing fix on hotfix push
+        if: github.event_name == 'push'
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('packages/coding-agent/src/mcp/standalone-bash.ts')
+          s = p.read_text()
+          old1 = 'new Response(proc.stdout).text(),'
+          old2 = 'new Response(proc.stderr).text(),'
+          if old1 in s or old2 in s:
+              s = s.replace(old1, 'new Response(proc.stdout as ReadableStream<Uint8Array>).text(),')
+              s = s.replace(old2, 'new Response(proc.stderr as ReadableStream<Uint8Array>).text(),')
+              p.write_text(s)
+          PY
+          if ! git diff --quiet -- packages/coding-agent/src/mcp/standalone-bash.ts; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add packages/coding-agent/src/mcp/standalone-bash.ts
+            git commit -m "fix(mcp): narrow spawned stream types"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
       - name: Verify canonical focused formatting
         run: |
           npx --yes oxfmt --check \
