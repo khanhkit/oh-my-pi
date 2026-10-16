@@ -329,6 +329,20 @@ export class StandaloneHarness implements HarnessSessionInterface {
 				isError: true,
 			};
 		}
+
+		const schema = tool.parameters as { properties?: Record<string, unknown> };
+		if (schema.properties) {
+			const unknown = Object.keys(request.arguments).find(key => !(key in schema.properties!));
+			if (unknown) {
+				return {
+					callId: request.callId,
+					toolName: request.toolName,
+					content: [{ type: "text", text: `Unknown argument for ${request.toolName}: ${unknown}` }],
+					isError: true,
+				};
+			}
+		}
+
 		try {
 			const result = await tool.run(request.arguments, {
 				cwd: this.workspacePolicy.cwd,
