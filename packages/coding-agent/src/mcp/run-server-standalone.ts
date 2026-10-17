@@ -14,6 +14,7 @@
 import { ExternalHarnessController } from "../harness/external-mode";
 import { OhMyPiMcpServer } from "./server";
 import { createStandaloneTools, discoverStandalonePlugins, StandaloneHarness } from "./standalone-harness";
+import { createGoalkeeperLifecycleTool } from "./standalone-kitcontrol-lifecycle";
 
 // stdout is reserved for JSON-RPC framing; route all diagnostics to stderr.
 console.log = (...args: unknown[]) => console.error(...args);
@@ -21,7 +22,7 @@ console.info = (...args: unknown[]) => console.error(...args);
 
 const workspaceRoot = process.env.OMP_WORKSPACE_ROOT ?? process.cwd();
 
-const harness = new StandaloneHarness(workspaceRoot, createStandaloneTools());
+const harness = new StandaloneHarness(workspaceRoot, [...createStandaloneTools(), createGoalkeeperLifecycleTool()]);
 
 const pluginResult = await discoverStandalonePlugins(workspaceRoot);
 for (const tool of pluginResult.tools) {
