@@ -3,6 +3,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createStandaloneTools, StandaloneHarness } from "../src/mcp/standalone-harness";
+import { createGoalkeeperLifecycleTool } from "../src/mcp/standalone-kitcontrol-lifecycle";
 
 const tempDirs: string[] = [];
 const savedEnv = { ...process.env };
@@ -47,7 +48,7 @@ async function executable(body: string): Promise<string> {
 }
 
 function lifecycleTool() {
-	const harness = new StandaloneHarness("/tmp", createStandaloneTools());
+	const harness = new StandaloneHarness("/tmp", [...createStandaloneTools(), createGoalkeeperLifecycleTool()]);
 	const tool = harness.getTool("goalkeeper_lifecycle");
 	expect(tool).toBeDefined();
 	return { harness, tool: tool! };
