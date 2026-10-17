@@ -84,8 +84,12 @@ async function invokeLifecycleBridge(
 			cleanup();
 			resolve(value);
 		};
-		const onAbort = () => finishReject(ctx.signal?.reason instanceof Error ? ctx.signal.reason : new Error("Aborted"));
-		const timer = setTimeout(() => finishReject(new Error("GoalKeeper lifecycle bridge timed out")), DEFAULT_TIMEOUT_MS);
+		const onAbort = () =>
+			finishReject(ctx.signal?.reason instanceof Error ? ctx.signal.reason : new Error("Aborted"));
+		const timer = setTimeout(
+			() => finishReject(new Error("GoalKeeper lifecycle bridge timed out")),
+			DEFAULT_TIMEOUT_MS,
+		);
 		const cleanup = () => {
 			clearTimeout(timer);
 			ctx.signal?.removeEventListener("abort", onAbort);
@@ -121,7 +125,9 @@ async function invokeLifecycleBridge(
 			}
 			const response = parsed as Record<string, unknown>;
 			if (response.ok !== true) {
-				finishReject(new Error(typeof response.error === "string" ? response.error : "GoalKeeper lifecycle request denied"));
+				finishReject(
+					new Error(typeof response.error === "string" ? response.error : "GoalKeeper lifecycle request denied"),
+				);
 				return;
 			}
 			finishResolve(response);
