@@ -68,8 +68,9 @@ describe("Git administration tool surface", () => {
 	test("invokes only the dedicated JSON bridge", async () => {
 		const dir = await tempDir();
 		const captured = join(dir, "request.json");
+		const capturedPath = join(dir, "path.txt");
 		process.env.OMP_KITCONTROL_GIT_ADMIN_BRIDGE = await executable(
-			`cat > ${JSON.stringify(captured)}\nprintf '%s' '{"ok":true,"action":"stage","project":"Demo","worker":"KitDev1","issue":"DEMO-001","worktree":"/tmp/wt","branch":"kit/test","head":"1111111111111111111111111111111111111111","git_common_dir":"/tmp/repo/.git","staged_paths":["README.md"]}'`,
+			`cat > ${JSON.stringify(captured)}\nprintf '%s' "$PATH" > ${JSON.stringify(capturedPath)}\nprintf '%s' '{"ok":true,"action":"stage","head":"1111111111111111111111111111111111111111","staged_count":1}'`,
 		);
 		const result = await harness().invokeTool({
 			callId: "stage",
@@ -88,6 +89,30 @@ describe("Git administration tool surface", () => {
 			expected_head: "1111111111111111111111111111111111111111",
 			paths: ["README.md"],
 		});
+		expect(await readFile(capturedPath, "utf8")).toBe("/usr/bin:/bin");
+		expect(JSON.parse(result.content?.find(item => item.type === "text")?.text ?? "{}")).toEqual({
+			ok: true,
+			action: "stage",
+			head: "1111111111111111111111111111111111111111",
+			staged_count: 1,
+		});
+	});
+
+	test("successful bridge responses require the exact action schema and reject internal fields", async () => {
+		const invalidResponses = [
+			'{"ok":true}',
+			'{"ok":true,"action":"stage","head":"1111111111111111111111111111111111111111","staged_count":1,"git_common_dir":"/tmp/repo/.git"}',
+			'{"ok":true,"action":"commit","old_head":"1111111111111111111111111111111111111111","new_head":"2222222222222222222222222222222222222222","committed_count":1}',
+		];
+		for (const payload of invalidResponses) {
+			process.env.OMP_KITCONTROL_GIT_ADMIN_BRIDGE = await executable(`printf '%s' '${payload}'`);
+			const result = await harness().invokeTool({
+				callId: "schema",
+				toolName: "git_admin",
+				arguments: { action: "stage", cwd: "/tmp/wt", expected_head: "1".repeat(40), paths: ["README.md"] },
+			});
+			expect(result.isError).toBe(true);
+		}
 	});
 
 	test("schema rejects arbitrary Git/admin fields before bridge invocation", async () => {

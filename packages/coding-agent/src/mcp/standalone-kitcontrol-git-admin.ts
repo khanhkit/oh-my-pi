@@ -31,7 +31,7 @@ function bridgeExecutable(): string {
 
 function bridgeEnvironment(): Record<string, string> {
 	const env: Record<string, string> = {
-		PATH: process.env.PATH ?? "/usr/bin:/bin",
+		PATH: "/usr/bin:/bin",
 		LANG: "C.UTF-8",
 		LC_ALL: "C.UTF-8",
 	};
@@ -67,6 +67,55 @@ async function readBoundedResponse(
 		offset += chunk.byteLength;
 	}
 	return output;
+}
+
+function isFullSha(value: unknown): value is string {
+	return typeof value === "string" && /^[0-9a-f]{40}$/.test(value);
+}
+
+function hasExactKeys(response: Record<string, unknown>, expected: readonly string[]): boolean {
+	const actual = Object.keys(response).sort();
+	const wanted = [...expected].sort();
+	return actual.length === wanted.length && actual.every((key, index) => key === wanted[index]);
+}
+
+function validateSuccessResponse(response: Record<string, unknown>, action: unknown): Record<string, unknown> {
+	if (action === "stage") {
+		if (
+			!hasExactKeys(response, ["ok", "action", "head", "staged_count"]) ||
+			response.ok !== true ||
+			response.action !== "stage" ||
+			!isFullSha(response.head) ||
+			!Number.isInteger(response.staged_count) ||
+			(response.staged_count as number) < 1 ||
+			(response.staged_count as number) > 128
+		) {
+			throw new Error("Git administration bridge returned invalid stage response");
+		}
+		return { ok: true, action: "stage", head: response.head, staged_count: response.staged_count };
+	}
+	if (action === "commit") {
+		if (
+			!hasExactKeys(response, ["ok", "action", "old_head", "new_head", "committed_count"]) ||
+			response.ok !== true ||
+			response.action !== "commit" ||
+			!isFullSha(response.old_head) ||
+			!isFullSha(response.new_head) ||
+			!Number.isInteger(response.committed_count) ||
+			(response.committed_count as number) < 1 ||
+			(response.committed_count as number) > 128
+		) {
+			throw new Error("Git administration bridge returned invalid commit response");
+		}
+		return {
+			ok: true,
+			action: "commit",
+			old_head: response.old_head,
+			new_head: response.new_head,
+			committed_count: response.committed_count,
+		};
+	}
+	throw new Error("Git administration request action is invalid");
 }
 
 async function invokeGitAdminBridge(
@@ -140,9 +189,9 @@ async function invokeGitAdminBridge(
 		}
 		const response = parsed as Record<string, unknown>;
 		if (response.ok !== true) {
-			throw new Error(typeof response.error === "string" ? response.error : "Git administration request denied");
+			throw new Error("Git administration request denied");
 		}
-		return response;
+		return validateSuccessResponse(response, request.action);
 	} finally {
 		if (timer) clearTimeout(timer);
 		ctx.signal?.removeEventListener("abort", abort);
