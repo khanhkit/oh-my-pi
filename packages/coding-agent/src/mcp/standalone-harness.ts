@@ -35,8 +35,10 @@ export interface StandaloneTool {
 	readonly parameters: Record<string, unknown>;
 	/** Marks a tool that mutates the workspace (gated by allowWrite). */
 	readonly write?: boolean;
-	/** Marks a tool that executes arbitrary commands (gated by allowExecution). */
+	/** Marks a tool that executes a process (gated by allowExecution). */
 	readonly execution?: boolean;
+	/** Marks a machine-privileged tool; wildcard allowlists never authorize it. */
+	readonly privileged?: boolean;
 	run(args: Record<string, unknown>, ctx: StandaloneToolContext): Promise<StandaloneToolResult>;
 }
 
@@ -309,6 +311,9 @@ export class StandaloneHarness implements HarnessSessionInterface {
 			name: tool.name,
 			description: tool.description,
 			parameters: tool.parameters,
+			write: tool.write,
+			execution: tool.execution,
+			privileged: tool.privileged,
 		};
 	}
 

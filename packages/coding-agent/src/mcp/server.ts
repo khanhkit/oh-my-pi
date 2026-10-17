@@ -166,7 +166,7 @@ export class OhMyPiMcpServer {
 
 				const descriptors = this.#harness.getTools();
 				const allowedDescriptors = this.#externalController
-					? descriptors.filter(tool => this.#externalController!.isToolAllowed(tool.name))
+					? descriptors.filter(tool => this.#externalController!.isToolAllowed(tool))
 					: descriptors;
 				const tools = allowedDescriptors.map((tool: ToolDescriptor) => {
 					const rawParams = tool.parameters;
@@ -219,7 +219,8 @@ export class OhMyPiMcpServer {
 						: {};
 
 				if (this.#externalController) {
-					const auth = this.#externalController.authorizeInvocation(toolName);
+					const descriptor = this.#harness.getTool(toolName);
+					const auth = this.#externalController.authorizeInvocation(descriptor ?? toolName);
 					if (!auth.allowed) {
 						return {
 							jsonrpc: "2.0",

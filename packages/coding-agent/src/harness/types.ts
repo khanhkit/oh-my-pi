@@ -19,6 +19,12 @@ export interface ToolDescriptor {
 	readonly loadMode?: string;
 	readonly summary?: string;
 	readonly strict?: boolean;
+	/** Trusted harness metadata: mutation requires allowWrite. */
+	readonly write?: boolean;
+	/** Trusted harness metadata: process execution requires allowExecution. */
+	readonly execution?: boolean;
+	/** Privileged tools require allowPrivileged and an explicit tool allowlist entry; wildcard never grants it. */
+	readonly privileged?: boolean;
 }
 
 export interface ToolInvocationRequest {
