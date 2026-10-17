@@ -5,8 +5,18 @@ on:
     paths:
       - "packages/coding-agent/src/mcp/standalone-bash.ts"
       - "packages/coding-agent/src/mcp/standalone-harness.ts"
+      - "packages/coding-agent/src/mcp/standalone-kitcontrol-lifecycle.ts"
+      - "packages/coding-agent/src/mcp/run-server-standalone.ts"
+      - "packages/coding-agent/src/mcp/run-server-http.ts"
+      - "packages/coding-agent/src/mcp/run-server.ts"
+      - "packages/coding-agent/src/mcp/run-server-kitcontrol-lifecycle.ts"
+      - "packages/coding-agent/src/harness/external-mode.ts"
+      - "packages/coding-agent/src/harness/types.ts"
+      - "packages/coding-agent/src/mcp/server.ts"
       - "packages/coding-agent/test/mcp-standalone-bash.test.ts"
       - "packages/coding-agent/test/mcp-stateless-kitcontrol-exec.test.ts"
+      - "packages/coding-agent/test/mcp-goalkeeper-lifecycle.test.ts"
+      - "packages/coding-agent/test/mcp-external-mode.test.ts"
       - ".github/workflows/stateless-kitcontrol-exec.yml"
   push:
     branches:
@@ -14,8 +24,18 @@ on:
     paths:
       - "packages/coding-agent/src/mcp/standalone-bash.ts"
       - "packages/coding-agent/src/mcp/standalone-harness.ts"
+      - "packages/coding-agent/src/mcp/standalone-kitcontrol-lifecycle.ts"
+      - "packages/coding-agent/src/mcp/run-server-standalone.ts"
+      - "packages/coding-agent/src/mcp/run-server-http.ts"
+      - "packages/coding-agent/src/mcp/run-server.ts"
+      - "packages/coding-agent/src/mcp/run-server-kitcontrol-lifecycle.ts"
+      - "packages/coding-agent/src/harness/external-mode.ts"
+      - "packages/coding-agent/src/harness/types.ts"
+      - "packages/coding-agent/src/mcp/server.ts"
       - "packages/coding-agent/test/mcp-standalone-bash.test.ts"
       - "packages/coding-agent/test/mcp-stateless-kitcontrol-exec.test.ts"
+      - "packages/coding-agent/test/mcp-goalkeeper-lifecycle.test.ts"
+      - "packages/coding-agent/test/mcp-external-mode.test.ts"
       - ".github/workflows/stateless-kitcontrol-exec.yml"
 
 permissions:
@@ -36,13 +56,25 @@ jobs:
           npx --yes oxfmt --check \
             packages/coding-agent/src/mcp/standalone-bash.ts \
             packages/coding-agent/src/mcp/standalone-harness.ts \
+            packages/coding-agent/src/mcp/standalone-kitcontrol-lifecycle.ts \
+            packages/coding-agent/src/mcp/run-server-standalone.ts \
+            packages/coding-agent/src/mcp/run-server-http.ts \
+            packages/coding-agent/src/mcp/run-server.ts \
+            packages/coding-agent/src/mcp/run-server-kitcontrol-lifecycle.ts \
+            packages/coding-agent/src/harness/external-mode.ts \
+            packages/coding-agent/src/harness/types.ts \
+            packages/coding-agent/src/mcp/server.ts \
             packages/coding-agent/test/mcp-standalone-bash.test.ts \
-            packages/coding-agent/test/mcp-stateless-kitcontrol-exec.test.ts
+            packages/coding-agent/test/mcp-stateless-kitcontrol-exec.test.ts \
+            packages/coding-agent/test/mcp-goalkeeper-lifecycle.test.ts \
+            packages/coding-agent/test/mcp-external-mode.test.ts
           git diff --check
       - name: Type check coding-agent
-        run: bun --cwd packages/coding-agent run check:types
+        run: cd packages/coding-agent && bun run check:types
       - name: Run standalone KitControl execution regressions
         run: >-
           bun test
           packages/coding-agent/test/mcp-standalone-bash.test.ts
           packages/coding-agent/test/mcp-stateless-kitcontrol-exec.test.ts
+          packages/coding-agent/test/mcp-goalkeeper-lifecycle.test.ts
+          packages/coding-agent/test/mcp-external-mode.test.ts

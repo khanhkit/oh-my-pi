@@ -13,6 +13,7 @@ export interface ExternalHarnessConfig {
 	allowedTools?: string[];
 	allowWrite?: boolean;
 	allowExecution?: boolean;
+	allowPrivileged?: boolean;
 	workspaceRoot?: string;
 }
 
@@ -21,6 +22,7 @@ export interface ResolvedExternalHarnessConfig {
 	readonly allowedTools: readonly string[];
 	readonly allowWrite: boolean;
 	readonly allowExecution: boolean;
+	readonly allowPrivileged: boolean;
 	readonly workspaceRoot: string;
 }
 
@@ -69,6 +71,7 @@ export class ExternalHarnessController {
 			allowedTools: Object.freeze(config?.allowedTools ? [...config.allowedTools] : []),
 			allowWrite: config?.allowWrite ?? false,
 			allowExecution: config?.allowExecution ?? false,
+			allowPrivileged: config?.allowPrivileged ?? false,
 			workspaceRoot: config?.workspaceRoot ?? process.cwd(),
 		});
 	}
@@ -118,11 +121,11 @@ export class ExternalHarnessController {
 		}
 	}
 
-	isToolAllowed(toolName: string): boolean {
-		return this.checkToolPermission(toolName).allowed;
+	isToolAllowed(tool: string | ToolDescriptor): boolean {
+		return this.checkToolPermission(tool).allowed;
 	}
 
-	checkToolPermission(toolName: string): { allowed: boolean; error?: ExternalHarnessError } {
+	checkToolPermission(tool: string | ToolDescriptor): { allowed: boolean; error?: ExternalHarnessError } {
 		if (!this.#enabled) {
 			return {
 				allowed: false,
@@ -130,7 +133,23 @@ export class ExternalHarnessController {
 			};
 		}
 
-		if (WRITE_TOOLS.has(toolName) && !this.#baseConfig.allowWrite) {
+		const descriptor = typeof tool === "string" ? undefined : tool;
+		const toolName = typeof tool === "string" ? tool : tool.name;
+		const isPrivileged = descriptor?.privileged === true;
+		const isWrite = descriptor?.write === true || WRITE_TOOLS.has(toolName);
+		const isExecution = descriptor?.execution === true || EXECUTION_TOOLS.has(toolName);
+
+		if (isPrivileged && !this.#baseConfig.allowPrivileged) {
+			return {
+				allowed: false,
+				error: {
+					code: "PERMISSION_DENIED",
+					message: `Privileged operations are not permitted by external harness policy for tool "${toolName}".`,
+				},
+			};
+		}
+
+		if (isWrite && !this.#baseConfig.allowWrite) {
 			return {
 				allowed: false,
 				error: {
@@ -140,7 +159,7 @@ export class ExternalHarnessController {
 			};
 		}
 
-		if (EXECUTION_TOOLS.has(toolName) && !this.#baseConfig.allowExecution) {
+		if (isExecution && !this.#baseConfig.allowExecution) {
 			return {
 				allowed: false,
 				error: {
@@ -150,8 +169,9 @@ export class ExternalHarnessController {
 			};
 		}
 
-		const isExplicitlyAllowed =
-			this.#baseConfig.allowedTools.includes("*") || this.#baseConfig.allowedTools.includes(toolName);
+		const explicitlyNamed = this.#baseConfig.allowedTools.includes(toolName);
+		const wildcardAllowed = this.#baseConfig.allowedTools.includes("*");
+		const isExplicitlyAllowed = explicitlyNamed || (!isPrivileged && wildcardAllowed);
 
 		if (!isExplicitlyAllowed) {
 			return {
@@ -166,20 +186,20 @@ export class ExternalHarnessController {
 		return { allowed: true };
 	}
 
-	authorizeExternalCall(toolName: string): { allowed: boolean; reason?: string } {
-		const check = this.checkToolPermission(toolName);
+	authorizeExternalCall(tool: string | ToolDescriptor): { allowed: boolean; reason?: string } {
+		const check = this.checkToolPermission(tool);
 		return {
 			allowed: check.allowed,
 			...(check.error ? { reason: check.error.message } : {}),
 		};
 	}
 
-	authorizeInvocation(toolName: string): { allowed: boolean; error?: ExternalHarnessError } {
-		return this.checkToolPermission(toolName);
+	authorizeInvocation(tool: string | ToolDescriptor): { allowed: boolean; error?: ExternalHarnessError } {
+		return this.checkToolPermission(tool);
 	}
 
-	assertCanInvoke(toolName: string): void {
-		const result = this.checkToolPermission(toolName);
+	assertCanInvoke(tool: string | ToolDescriptor): void {
+		const result = this.checkToolPermission(tool);
 		if (!result.allowed && result.error) {
 			const err = new Error(result.error.message);
 			(err as any).code = result.error.code;
@@ -294,7 +314,7 @@ export function createConnectedHarnessPair(options?: ConnectedHarnessPairOptions
 			handleMessage: (msg: unknown) => mcpServer.handleMessage(msg),
 			connectTransport: (transport: McpTransport) => mcpServer.connectTransport(transport),
 			invokeTool: async (req: ToolInvocationRequest) => {
-				const auth = controller.authorizeInvocation(req.toolName);
+				const auth = controller.authorizeInvocation(harness.getTool(req.toolName) ?? req.toolName);
 				if (!auth.allowed) {
 					return {
 						callId: req.callId,

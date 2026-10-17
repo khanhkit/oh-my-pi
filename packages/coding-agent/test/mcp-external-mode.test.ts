@@ -98,6 +98,34 @@ describe("mcp-external-mode", () => {
 		expect(execAllowedController.checkToolPermission("bash").allowed).toBe(true);
 	});
 
+	test("privileged descriptor metadata survives policy and wildcard is not explicit authorization", () => {
+		const privileged = {
+			name: "goalkeeper_lifecycle",
+			description: "privileged",
+			parameters: { type: "object", properties: {} },
+			write: true,
+			execution: true,
+			privileged: true,
+		};
+		const wildcard = new ExternalHarnessController({
+			enabled: true,
+			allowedTools: ["*"],
+			allowWrite: true,
+			allowExecution: true,
+			allowPrivileged: true,
+		});
+		expect(wildcard.authorizeInvocation(privileged).allowed).toBe(false);
+
+		const explicit = new ExternalHarnessController({
+			enabled: true,
+			allowedTools: ["goalkeeper_lifecycle"],
+			allowWrite: true,
+			allowExecution: true,
+			allowPrivileged: true,
+		});
+		expect(explicit.authorizeInvocation(privileged).allowed).toBe(true);
+	});
+
 	test("Test 4: OhMyPiMcpServer integration with externalController (disabled vs enabled)", async () => {
 		const harness = new DefaultInProcessHarness("/home/coder/OhMyPi");
 		harness.registerTool(
