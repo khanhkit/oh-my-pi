@@ -10,8 +10,8 @@ import {
 
 const MACHINE_ROOT = "/run/kitcontrol-lifecycle";
 const BRIDGE_ROOT = `${MACHINE_ROOT}/KitControl`;
-const INTERPRETER_ROOT = MACHINE_ROOT;
-const INTERPRETER_PATH = `${MACHINE_ROOT}/python3`;
+const INTERPRETER_ROOT = `${MACHINE_ROOT}/python-runtime`;
+const INTERPRETER_PATH = `${INTERPRETER_ROOT}/bin/python3.13`;
 
 function machineArgs(argv: string[]): TrustedLifecycleConfig {
 	const values = new Map<string, string>();
