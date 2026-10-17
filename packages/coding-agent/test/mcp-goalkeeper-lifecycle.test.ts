@@ -279,6 +279,33 @@ describe("trusted lifecycle bridge", () => {
 		expect((result.content[0] as { text: string }).text.toLowerCase()).toContain("regular file");
 	});
 
+	test("rejects mutable interpreter before execution", async () => {
+		const { workspaceRoot, config } = await trustedConfig();
+		await chmod(config.interpreterPath, 0o777);
+		const harness = new StandaloneHarness(workspaceRoot, [createGoalkeeperLifecycleTool(config)]);
+		const result = await harness.invokeTool({
+			callId: "mutable-interpreter",
+			toolName: "goalkeeper_lifecycle",
+			arguments: { action: "supervisor_bootstrap" },
+		});
+		expect(result.isError).toBe(true);
+		expect((result.content[0] as { text: string }).text.toLowerCase()).toContain("mutable");
+	});
+
+	test("rejects wrong interpreter file type before execution", async () => {
+		const { workspaceRoot, config } = await trustedConfig();
+		await rm(config.interpreterPath);
+		await mkdir(config.interpreterPath);
+		const harness = new StandaloneHarness(workspaceRoot, [createGoalkeeperLifecycleTool(config)]);
+		const result = await harness.invokeTool({
+			callId: "interpreter-directory",
+			toolName: "goalkeeper_lifecycle",
+			arguments: { action: "supervisor_bootstrap" },
+		});
+		expect(result.isError).toBe(true);
+		expect((result.content[0] as { text: string }).text.toLowerCase()).toContain("regular file");
+	});
+
 	test("rejects symlink interpreter before execution", async () => {
 		const { root, workspaceRoot, config } = await trustedConfig();
 		const link = join(root, "machine", "python", "bin", "python-link");
