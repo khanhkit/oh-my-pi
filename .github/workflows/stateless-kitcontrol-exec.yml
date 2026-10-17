@@ -6,6 +6,7 @@ on:
       - "packages/coding-agent/src/mcp/standalone-bash.ts"
       - "packages/coding-agent/src/mcp/standalone-harness.ts"
       - "packages/coding-agent/src/mcp/standalone-kitcontrol-lifecycle.ts"
+      - "packages/coding-agent/src/mcp/run-server-standalone.ts"
       - "packages/coding-agent/test/mcp-standalone-bash.test.ts"
       - "packages/coding-agent/test/mcp-stateless-kitcontrol-exec.test.ts"
       - "packages/coding-agent/test/mcp-goalkeeper-lifecycle.test.ts"
@@ -17,6 +18,7 @@ on:
       - "packages/coding-agent/src/mcp/standalone-bash.ts"
       - "packages/coding-agent/src/mcp/standalone-harness.ts"
       - "packages/coding-agent/src/mcp/standalone-kitcontrol-lifecycle.ts"
+      - "packages/coding-agent/src/mcp/run-server-standalone.ts"
       - "packages/coding-agent/test/mcp-standalone-bash.test.ts"
       - "packages/coding-agent/test/mcp-stateless-kitcontrol-exec.test.ts"
       - "packages/coding-agent/test/mcp-goalkeeper-lifecycle.test.ts"
@@ -40,12 +42,14 @@ jobs:
           npx --yes oxfmt --check \
             packages/coding-agent/src/mcp/standalone-bash.ts \
             packages/coding-agent/src/mcp/standalone-harness.ts \
+            packages/coding-agent/src/mcp/standalone-kitcontrol-lifecycle.ts \
+            packages/coding-agent/src/mcp/run-server-standalone.ts \
             packages/coding-agent/test/mcp-standalone-bash.test.ts \
             packages/coding-agent/test/mcp-stateless-kitcontrol-exec.test.ts \
             packages/coding-agent/test/mcp-goalkeeper-lifecycle.test.ts
           git diff --check
       - name: Type check coding-agent
-        run: bun --cwd packages/coding-agent run check:types
+        run: cd packages/coding-agent && bun run check:types
       - name: Run standalone KitControl execution regressions
         run: >-
           bun test
