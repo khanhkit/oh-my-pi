@@ -5,8 +5,10 @@ on:
     paths:
       - "packages/coding-agent/src/mcp/standalone-bash.ts"
       - "packages/coding-agent/src/mcp/standalone-harness.ts"
+      - "packages/coding-agent/src/mcp/standalone-kitcontrol-lifecycle.ts"
       - "packages/coding-agent/test/mcp-standalone-bash.test.ts"
       - "packages/coding-agent/test/mcp-stateless-kitcontrol-exec.test.ts"
+      - "packages/coding-agent/test/mcp-goalkeeper-lifecycle.test.ts"
       - ".github/workflows/stateless-kitcontrol-exec.yml"
   push:
     branches:
@@ -14,8 +16,10 @@ on:
     paths:
       - "packages/coding-agent/src/mcp/standalone-bash.ts"
       - "packages/coding-agent/src/mcp/standalone-harness.ts"
+      - "packages/coding-agent/src/mcp/standalone-kitcontrol-lifecycle.ts"
       - "packages/coding-agent/test/mcp-standalone-bash.test.ts"
       - "packages/coding-agent/test/mcp-stateless-kitcontrol-exec.test.ts"
+      - "packages/coding-agent/test/mcp-goalkeeper-lifecycle.test.ts"
       - ".github/workflows/stateless-kitcontrol-exec.yml"
 
 permissions:
@@ -37,7 +41,8 @@ jobs:
             packages/coding-agent/src/mcp/standalone-bash.ts \
             packages/coding-agent/src/mcp/standalone-harness.ts \
             packages/coding-agent/test/mcp-standalone-bash.test.ts \
-            packages/coding-agent/test/mcp-stateless-kitcontrol-exec.test.ts
+            packages/coding-agent/test/mcp-stateless-kitcontrol-exec.test.ts \
+            packages/coding-agent/test/mcp-goalkeeper-lifecycle.test.ts
           git diff --check
       - name: Type check coding-agent
         run: bun --cwd packages/coding-agent run check:types
@@ -46,3 +51,4 @@ jobs:
           bun test
           packages/coding-agent/test/mcp-standalone-bash.test.ts
           packages/coding-agent/test/mcp-stateless-kitcontrol-exec.test.ts
+          packages/coding-agent/test/mcp-goalkeeper-lifecycle.test.ts
