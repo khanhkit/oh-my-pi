@@ -229,6 +229,7 @@ export function createGitAdminTool(): StandaloneTool {
 			additionalProperties: false,
 		},
 		write: true,
+		privileged: true,
 		async run(args, ctx) {
 			return runStandaloneGitAdmin(args, ctx);
 		},
