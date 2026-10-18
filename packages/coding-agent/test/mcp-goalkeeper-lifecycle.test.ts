@@ -116,6 +116,9 @@ describe("machine-bound lifecycle model surface", () => {
 	test("production privileged entrypoint fixes executable trust roots under machine-only /run mount", async () => {
 		const source = await readFile(new URL("../src/mcp/run-server-kitcontrol-lifecycle.ts", import.meta.url), "utf8");
 		expect(source).toContain('const MACHINE_ROOT = "/run/kitcontrol-lifecycle"');
+		expect(source).toContain("const INTERPRETER_ROOT = `${MACHINE_ROOT}/python-runtime`");
+		expect(source).toContain("const INTERPRETER_PATH = `${INTERPRETER_ROOT}/bin/python3.13`");
+		expect(source).not.toContain("const INTERPRETER_PATH = `${MACHINE_ROOT}/python3`");
 		expect(source).not.toContain('"--bridge"');
 		expect(source).not.toContain('"--interpreter"');
 		expect(source).not.toContain('"--workspace-root"');
