@@ -2,6 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ExternalHarnessController } from "../src/harness/external-mode";
+import { OhMyPiMcpServer } from "../src/mcp/server";
 import { createStandaloneTools, StandaloneHarness } from "../src/mcp/standalone-harness";
 import { createGitAdminTool } from "../src/mcp/standalone-kitcontrol-git-admin";
 
@@ -37,8 +39,9 @@ describe("Git administration tool surface", () => {
 		const tool = createGitAdminTool();
 		const parameters = tool.parameters as { properties?: Record<string, unknown>; required?: string[] };
 		expect(tool.name).toBe("git_admin");
-		expect(createStandaloneTools().some(candidate => candidate.name === "git_admin")).toBe(true);
+		expect(createStandaloneTools().some(candidate => candidate.name === "git_admin")).toBe(false);
 		expect(tool.write).toBe(true);
+		expect(tool.privileged).toBe(true);
 		expect(tool.execution).not.toBe(true);
 		expect(parameters.required).toEqual(["action", "cwd", "expected_head", "paths"]);
 		expect(Object.keys(parameters.properties ?? {}).sort()).toEqual(
@@ -63,6 +66,51 @@ describe("Git administration tool surface", () => {
 		]) {
 			expect(parameters.properties ?? {}).not.toHaveProperty(forbidden);
 		}
+	});
+
+	test("shared/wildcard MCP cannot list or invoke machine-privileged git_admin", async () => {
+		const tool = createGitAdminTool();
+		const h = new StandaloneHarness("/tmp", [tool]);
+		const policy = new ExternalHarnessController({
+			enabled: true,
+			allowedTools: ["*"],
+			allowWrite: true,
+			allowExecution: true,
+			allowPrivileged: true,
+		});
+		expect(policy.authorizeInvocation(h.getTool("git_admin")!).allowed).toBe(false);
+		const server = new OhMyPiMcpServer(h, { externalController: policy });
+		const listed = (await server.handleMessage({ jsonrpc: "2.0", id: 1, method: "tools/list" })) as any;
+		expect(listed.result.tools).toHaveLength(0);
+		const result = (await server.handleMessage({
+			jsonrpc: "2.0", id: 2, method: "tools/call",
+			params: {
+				name: "git_admin",
+				arguments: { action: "stage", cwd: "/tmp", expected_head: "1".repeat(40), paths: ["README.md"] },
+			},
+		})) as any;
+		expect(result.error?.code).toBe("PERMISSION_DENIED");
+	});
+
+	test("even explicitly named git_admin needs the privileged and write gates", () => {
+		const descriptor = new StandaloneHarness("/tmp", [createGitAdminTool()]).getTool("git_admin")!;
+		for (const missing of ["privileged", "write"] as const) {
+			const policy = new ExternalHarnessController({
+				enabled: true,
+				allowedTools: ["git_admin"],
+				allowPrivileged: missing !== "privileged",
+				allowWrite: missing !== "write",
+				allowExecution: true,
+			});
+			expect(policy.authorizeInvocation(descriptor).allowed).toBe(false);
+		}
+		const privilegedOnly = new ExternalHarnessController({
+			enabled: true,
+			allowedTools: ["git_admin"],
+			allowPrivileged: true,
+			allowWrite: true,
+		});
+		expect(privilegedOnly.authorizeInvocation(descriptor).allowed).toBe(true);
 	});
 
 	test("invokes only the dedicated JSON bridge", async () => {
