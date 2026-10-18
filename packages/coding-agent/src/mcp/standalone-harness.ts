@@ -18,7 +18,6 @@ import type {
 	WorkspacePolicy,
 } from "../harness/types";
 import { authorizePath, runStandaloneBash } from "./standalone-bash";
-import { createGitAdminTool } from "./standalone-kitcontrol-git-admin";
 
 export interface StandaloneToolContext {
 	readonly cwd: string;
@@ -283,7 +282,6 @@ export function createStandaloneTools(): StandaloneTool[] {
 				return runStandaloneBash({ command: asString(args.command), ...(cwd ? { cwd } : {}) }, ctx);
 			},
 		},
-		createGitAdminTool(),
 	];
 }
 
