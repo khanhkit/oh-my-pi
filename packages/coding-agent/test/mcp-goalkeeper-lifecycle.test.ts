@@ -79,7 +79,6 @@ describe("machine-bound lifecycle model surface", () => {
 		expect(createStandaloneTools().map(item => item.name)).not.toContain(tool.name);
 	});
 
-
 	test("GoalKeeper schema omits project/role/capability and Architect-only actions", async () => {
 		const { config } = await trustedConfig();
 		const tool = createGoalkeeperLifecycleTool(config);
