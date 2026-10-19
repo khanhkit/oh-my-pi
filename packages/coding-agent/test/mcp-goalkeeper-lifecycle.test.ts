@@ -8,6 +8,7 @@ import { createStandaloneTools, StandaloneHarness } from "../src/mcp/standalone-
 import {
 	createArchitectLifecycleTool,
 	createGoalkeeperLifecycleTool,
+	createUnifiedLifecycleTool,
 	type TrustedLifecycleConfig,
 } from "../src/mcp/standalone-kitcontrol-lifecycle";
 
@@ -61,6 +62,23 @@ function schemaProperties(tool: ReturnType<typeof createGoalkeeperLifecycleTool>
 }
 
 describe("machine-bound lifecycle model surface", () => {
+	test("KitDev uses the same guarded action set as Architect and GoalKeeper", async () => {
+		const { config } = await trustedConfig();
+		const devConfig: TrustedLifecycleConfig = { ...config, role: "KitDev" };
+		const tool = createUnifiedLifecycleTool(devConfig);
+		const properties = schemaProperties(tool);
+		const actions = (properties.action as { enum?: string[] }).enum ?? [];
+		expect(actions).toContain("recover");
+		expect(actions).toContain("claim");
+		expect(actions).toContain("escalation_claim");
+		expect(actions).toContain("escalation_resolve");
+		expect(properties).not.toHaveProperty("caller_role");
+		expect(properties).not.toHaveProperty("project");
+		expect(properties).not.toHaveProperty("session_epoch");
+		expect(tool.privileged).toBe(true);
+		expect(createStandaloneTools().map(item => item.name)).not.toContain(tool.name);
+	});
+
 	test("GoalKeeper schema omits project/role/capability and Architect-only actions", async () => {
 		const { config } = await trustedConfig();
 		const tool = createGoalkeeperLifecycleTool(config);
