@@ -5,6 +5,7 @@ import { StandaloneHarness } from "./standalone-harness";
 import {
 	createArchitectLifecycleTool,
 	createGoalkeeperLifecycleTool,
+	createUnifiedLifecycleTool,
 	type TrustedLifecycleConfig,
 } from "./standalone-kitcontrol-lifecycle";
 
@@ -29,13 +30,13 @@ function machineArgs(argv: string[]): TrustedLifecycleConfig {
 		if (!values.has(flag)) throw new Error(`missing privileged lifecycle argument: ${flag}`);
 	if (values.size !== required.length) throw new Error("unsupported privileged lifecycle machine argument");
 	const role = values.get("--role");
-	if (role !== "KitGoalKeeper" && role !== "KitArchitect")
-		throw new Error("invalid privileged lifecycle machine role");
+	if (role !== "KitGoalKeeper" && role !== "KitArchitect" && role !== "KitDev")
+		throw new Error("invalid lifecycle machine role");
 	return {
 		role,
 		project: values.get("--project")!,
 		authorityRoot: values.get("--authority-root")!,
-		bridgePath: `${BRIDGE_ROOT}/bin/${role === "KitGoalKeeper" ? "kit-goalkeeper-lifecycle" : "kit-architect-lifecycle"}`,
+		bridgePath: `${BRIDGE_ROOT}/bin/${role === "KitArchitect" ? "kit-architect-lifecycle" : "kit-goalkeeper-lifecycle"}`,
 		bridgeRoot: BRIDGE_ROOT,
 		interpreterPath: INTERPRETER_PATH,
 		interpreterRoot: INTERPRETER_ROOT,
@@ -44,12 +45,17 @@ function machineArgs(argv: string[]): TrustedLifecycleConfig {
 
 const config = machineArgs(process.argv.slice(2));
 const workspaceRoot = process.cwd();
-const tool =
-	config.role === "KitGoalKeeper" ? createGoalkeeperLifecycleTool(config) : createArchitectLifecycleTool(config);
-const harness = new StandaloneHarness(workspaceRoot, [tool]);
+const legacyTool =
+	config.role === "KitGoalKeeper"
+		? createGoalkeeperLifecycleTool(config)
+		: config.role === "KitArchitect"
+			? createArchitectLifecycleTool(config)
+			: undefined;
+const tools = [createUnifiedLifecycleTool(config), ...(legacyTool ? [legacyTool] : [])];
+const harness = new StandaloneHarness(workspaceRoot, tools);
 const externalController = new ExternalHarnessController({
 	enabled: true,
-	allowedTools: [tool.name],
+	allowedTools: tools.map(tool => tool.name),
 	allowWrite: true,
 	allowExecution: true,
 	allowPrivileged: true,
