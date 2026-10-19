@@ -23,7 +23,7 @@ export const GOALKEEPER_LIFECYCLE_ACTIONS = [
 export const ARCHITECT_LIFECYCLE_ACTIONS = ["escalation_claim", "escalation_resolve"] as const;
 
 export interface TrustedLifecycleConfig {
-	readonly role: "KitGoalKeeper" | "KitArchitect";
+	readonly role: "KitGoalKeeper" | "KitArchitect" | "KitDev";
 	readonly project: string;
 	readonly authorityRoot: string;
 	readonly bridgePath: string;
@@ -249,7 +249,7 @@ const resolutionSchema = {
 } as const;
 
 function privilegedTool(
-	name: "goalkeeper_lifecycle" | "architect_lifecycle",
+	name: "goalkeeper_lifecycle" | "architect_lifecycle" | "kitcontrol_lifecycle",
 	description: string,
 	actions: readonly string[],
 	properties: Record<string, unknown>,
@@ -317,6 +317,28 @@ export function createArchitectLifecycleTool(config: TrustedLifecycleConfig): St
 			id: { type: "string" },
 			resolution: resolutionSchema,
 		},
+		config,
+	);
+}
+
+/**
+ * Common machine-private KitControl lifecycle surface for every engineering
+ * actor role. Role names affect responsibility, not the action permission set.
+ * Preserve the old tool names as compatibility aliases for existing clients.
+ * Never add this tool to the shared HTTP standalone registry.
+ */
+export function createUnifiedLifecycleTool(config: TrustedLifecycleConfig): StandaloneTool {
+	const goalkeeper = createGoalkeeperLifecycleTool({ ...config, role: "KitGoalKeeper" });
+	const architect = createArchitectLifecycleTool({ ...config, role: "KitArchitect" });
+	const goalProperties = (goalkeeper.parameters as { properties: Record<string, unknown> }).properties;
+	const architectProperties = (architect.parameters as { properties: Record<string, unknown> }).properties;
+	const { action: _goalAction, ...goalFields } = goalProperties;
+	const { action: _archAction, ...archFields } = architectProperties;
+	return privilegedTool(
+		"kitcontrol_lifecycle",
+		"Perform a guarded KitControl board/lifecycle action. Shared by all roles on a trusted host-only transport.",
+		[...GOALKEEPER_LIFECYCLE_ACTIONS, ...ARCHITECT_LIFECYCLE_ACTIONS],
+		{ ...goalFields, ...archFields },
 		config,
 	);
 }
